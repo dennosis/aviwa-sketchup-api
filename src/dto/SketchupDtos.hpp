@@ -1,5 +1,4 @@
 #pragma once
-
 #include "oatpp/core/macro/codegen.hpp"
 #include "oatpp/core/Types.hpp"
 
@@ -65,6 +64,14 @@ class UpdateAttributeDto : public oatpp::DTO
     DTO_FIELD(String, value);
 };
 
+class CreateGabsterStructureDto : public oatpp::DTO
+{
+
+    DTO_INIT(CreateGabsterStructureDto, DTO)
+
+    DTO_FIELD(String, filepath, "file_path");
+};
+
 class ResultDto : public oatpp::DTO
 {
 
@@ -82,3 +89,14 @@ class ResultDto : public oatpp::DTO
         return dto;
     }
 };
+
+class CreateSkpResultDto : public oatpp::DTO
+{
+    DTO_INIT(CreateSkpResultDto, DTO)
+
+    DTO_FIELD(Boolean, success);
+    DTO_FIELD(String, detail);
+    DTO_FIELD(String, savedPath); // Caminho onde o arquivo foi salvo
+};
+
+#include OATPP_CODEGEN_END(DTO)

@@ -7,14 +7,11 @@
 #include "Config.hpp"
 #include "service/SketchUpService.hpp"
 #include "service/FileService.hpp"
+#include <filesystem>
 
 class AppComponent
 {
 public:
-  /**
-   * 1. ObjectMapper CORRIGIDO: Usamos o tipo genérico 'data::mapping'
-   * para que o Controller consiga encontrá-lo.
-   */
   OATPP_CREATE_COMPONENT(std::shared_ptr<oatpp::data::mapping::ObjectMapper>, objectMapper)([]
                                                                                             {
     auto mapper = oatpp::parser::json::mapping::ObjectMapper::createShared();
@@ -57,4 +54,8 @@ public:
   // ... dentro da classe AppComponent ...
   OATPP_CREATE_COMPONENT(std::shared_ptr<FileService>, fileService)([]
                                                                     { return std::make_shared<FileService>(); }());
+
+  OATPP_CREATE_COMPONENT(std::shared_ptr<std::string>, tempPath)([]                                                      {
+    auto path = std::make_shared<std::string>(Config::getTempPath());
+    return path; }());
 };

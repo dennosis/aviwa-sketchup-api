@@ -9,9 +9,13 @@
 #include <SketchUpAPI/model/component_instance.h>
 #include "model/SketchUpComponentModel.hpp"
 #include "utils/SketchUpUtils.hpp"
+#include "utils/AviwaUtils.hpp"
+#include "utils/GabsterUtils.hpp"
 #include "oatpp/core/base/Environment.hpp"
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <fstream>
 
 class SketchUpService
 {
@@ -112,6 +116,7 @@ public:
         if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
 
         {
+            // NOTE: colcoar um erro
             SUTerminate();
             return result;
         }
@@ -284,9 +289,6 @@ public:
                                  const std::string &value)
     {
 
-        OATPP_LOGI("LOG", "----------------AQUII-------------------");
-
-
         SUInitialize();
         SUModelRef model = SU_INVALID;
         bool success = false;
@@ -372,5 +374,78 @@ public:
 
         SUTerminate();
         return success;
+    }
+
+    bool createGabsterStructure(const std::string &filepath)
+    {
+
+        SUInitialize();
+        SUModelRef model = SU_INVALID;
+        bool success = false;
+
+        if (SketchUpUtils::loadModel(filepath, model) == SU_ERROR_NONE)
+        {
+
+            SUResult res = GabsterUtils::createGabsterStructure(model);
+
+            if (res == SU_ERROR_NONE)
+            {
+                SUModelSaveToFile(model, filepath.c_str());
+                success = true;
+            }
+        }
+
+        SUTerminate();
+        return success;
+    }
+
+    bool createPaintingFile(const std::string &targetPath,
+                            const std::string &imageName,
+                            std::function<void(std::ostream *)> imageWriter,
+                            double width,
+                            double height,
+                            double thickness,
+                            std::string &outMessage)
+    {
+
+        // 1. Criar caminho temporário para a imagem
+        std::filesystem::path tmpPath = std::filesystem::temp_directory_path() / ("upload_" + imageName);
+        std::string tmpImagePath = tmpPath.string();
+
+        try
+        {
+            // 2. Salvar o stream da imagem no disco temporariamente
+            std::ofstream file(tmpImagePath, std::ios::binary);
+            imageWriter(&file);
+            file.close();
+
+            // 3. Inicializar SketchUp e Processar
+            SUInitialize();
+
+            SUResult res = AviwaUtils::createPaintingFile(targetPath, tmpImagePath, width, height, thickness);
+
+            SUTerminate();
+
+            // 4. Limpeza
+            std::filesystem::remove(tmpPath);
+
+            if (res == SU_ERROR_NONE)
+            {
+                outMessage = "Sucesso ao criar hierarquia ENTERPRISE->VOYAGER.";
+                return true;
+            }
+            else
+            {
+                outMessage = "Erro na SketchUp API: " + std::to_string(res);
+                return false;
+            }
+        }
+        catch (const std::exception &e)
+        {
+            outMessage = std::string("Erro de IO: ") + e.what();
+            if (std::filesystem::exists(tmpPath))
+                std::filesystem::remove(tmpPath);
+            return false;
+        }
     }
 };

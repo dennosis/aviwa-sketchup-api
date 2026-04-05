@@ -46,4 +46,19 @@ public:
         char *val = std::getenv(key.c_str());
         return (val == nullptr) ? "" : std::string(val);
     }
+
+    static std::string getTempPath()
+    {
+        std::string envPath = getEnvVar("APP_TEMP_PATH");
+        if (!envPath.empty())
+            return envPath;
+
+        namespace fs = std::filesystem;
+        fs::path current = fs::current_path();
+        fs::path projectRoot = current.parent_path().parent_path();
+        fs::path tempDir = projectRoot / "tmp";
+
+        fs::create_directories(tempDir); // garante que existe
+        return tempDir.string();
+    }
 };

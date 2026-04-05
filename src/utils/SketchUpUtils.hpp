@@ -1,10 +1,17 @@
 #pragma once
 
+#include <vector>
+#include <string>
 #include <SketchUpAPI/common.h>
 #include <SketchUpAPI/model/attribute_dictionary.h>
 #include <SketchUpAPI/model/typed_value.h>
 #include <SketchUpAPI/model/group.h>
+#include <SketchUpAPI/sketchup.h>
 #include "model/SketchUpComponentModel.hpp"
+#include <unordered_map>
+
+// Alias definido no header do controller ou num utils.hpp
+using ComponentAttributes = std::unordered_map<std::string, std::string>;
 
 class SketchUpUtils
 {
@@ -102,7 +109,6 @@ public:
         return result;
     }
 
-    // --- INSTÂNCIAS ---
     static std::string getInstanceName(SUComponentInstanceRef instance)
     {
         SUStringRef str = SU_INVALID;
@@ -123,7 +129,6 @@ public:
         return result;
     }
 
-    // --- DEFINIÇÕES (Onde deu o erro C2039) ---
     static std::string getDefinitionName(SUComponentDefinitionRef definition)
     {
         SUStringRef str = SU_INVALID;
@@ -144,7 +149,6 @@ public:
         return result;
     }
 
-    // --- GRUPOS ---
     static std::string getGroupName(SUGroupRef group)
     {
         SUStringRef str = SU_INVALID;
@@ -164,6 +168,7 @@ public:
         SUStringRelease(&str);
         return result;
     }
+
     static SUResult loadModel(const std::string &filepath, SUModelRef &out_model)
     {
         out_model = SU_INVALID;
@@ -219,14 +224,6 @@ public:
         return SUAttributeDictionarySetValue(dict, key.c_str(), value);
     }
 
-    /**
-     * Define um atributo na instância apenas se ele já existir na instância ou na definição.
-     * @param instance A instância que receberá o valor.
-     * @param dictName Nome do dicionário (ex: "dynamic_attributes").
-     * @param key Nome da chave (ex: "tmold").
-     * @param value O novo valor a ser gravado.
-     * @return SU_ERROR_NONE se sucesso, SU_ERROR_INVALID_ARGUMENT se o atributo não existir.
-     */
     static SUResult setAttributeWithValidation(SUComponentInstanceRef instance, const std::string &dictName, const std::string &key, SUTypedValueRef value)
     {
 
@@ -273,18 +270,7 @@ public:
         return setRawAttribute(SUComponentInstanceToEntity(instance), dictName, key, value);
     }
 
-    /**
-     * Define ou cria um atributo diretamente na Definição do componente.
-     * @param definition A referência da definição (SUComponentDefinitionRef).
-     * @param dictName Nome do dicionário (ex: "dynamic_attributes").
-     * @param key Nome da chave.
-     * @param value O valor a ser gravado.
-     * @return SU_ERROR_NONE em caso de sucesso.
-     */
-    static SUResult setDefinitionAttribute(SUComponentDefinitionRef definition,
-                                           const std::string &dictName,
-                                           const std::string &key,
-                                           SUTypedValueRef value)
+    static SUResult setDefinitionAttribute(SUComponentDefinitionRef definition, const std::string &dictName, const std::string &key, SUTypedValueRef value)
     {
 
         if (SUIsInvalid(definition))
@@ -309,12 +295,6 @@ public:
         return res;
     }
 
-    /**
-     * Busca recursivamente uma entidade (Componente ou Grupo) pelo seu GUID.
-     * @param entities A coleção de entidades onde começar a busca (geralmente as do modelo).
-     * @param guid O GUID string que estamos procurando.
-     * @return SUEntityRef válida se encontrado, ou SU_INVALID caso contrário.
-     */
     static SUEntityRef findEntityByGuid(SUEntitiesRef entities, const std::string &targetGuid)
     {
         if (SUIsInvalid(entities))
@@ -375,7 +355,6 @@ public:
         return SU_INVALID;
     }
 
-    // Função auxiliar para achar a definição pelo nome
     static SUComponentDefinitionRef findDefinitionInModel(SUModelRef model, const std::string &name)
     {
         size_t count = 0;
@@ -437,4 +416,98 @@ public:
 
         return SU_INVALID;
     }
+
+    static SUResult wrapRootInstances(SUModelRef model, const std::string &defName, const ComponentAttributes &attributes = {})
+    {
+        SUEntitiesRef modelEntities = SU_INVALID;
+        SUResult res = SUModelGetEntities(model, &modelEntities);
+        if (res != SU_ERROR_NONE)
+            return res;
+
+        size_t instanceCount = 0;
+        SUEntitiesGetNumInstances(modelEntities, &instanceCount);
+        if (instanceCount == 0)
+            return SU_ERROR_NONE;
+
+        std::vector<SUComponentInstanceRef> instances(instanceCount, SU_INVALID);
+        SUEntitiesGetInstances(modelEntities, instanceCount, instances.data(), &instanceCount);
+
+        // 1. Snapshot
+        struct InstData
+        {
+            SUComponentDefinitionRef def;
+            SUTransformation transform;
+        };
+        std::vector<InstData> snapshot(instanceCount);
+        for (size_t i = 0; i < instanceCount; ++i)
+        {
+            snapshot[i].def = SU_INVALID;
+            snapshot[i].transform = {};
+            SUComponentInstanceGetDefinition(instances[i], &snapshot[i].def);
+            SUComponentInstanceGetTransform(instances[i], &snapshot[i].transform);
+        }
+
+        // 2. Cria definição com o nome recebido
+        SUComponentDefinitionRef newDef = SU_INVALID;
+        res = SUComponentDefinitionCreate(&newDef);
+        if (res != SU_ERROR_NONE)
+            return res;
+        SUComponentDefinitionSetName(newDef, defName.c_str());
+
+        // 3. Aplica atributos opcionais via SUEntityGetAttributeDictionary
+        //    Chave no formato "dictName:attrKey"
+        if (!attributes.empty())
+        {
+            // ✅ SUComponentDefinition é uma SUEntity — cast correto
+            SUEntityRef defEntity = SUComponentDefinitionToEntity(newDef);
+
+            for (const auto &[rawKey, value] : attributes)
+            {
+                auto sep = rawKey.find(':');
+                if (sep == std::string::npos)
+                    continue;
+
+                std::string dictName = rawKey.substr(0, sep);
+                std::string attrKey = rawKey.substr(sep + 1);
+
+                // ✅ função correta do SDK
+                SUAttributeDictionaryRef dict = SU_INVALID;
+                SUEntityGetAttributeDictionary(defEntity, dictName.c_str(), &dict);
+
+                SUTypedValueRef typedVal = SU_INVALID;
+                SUTypedValueCreate(&typedVal);
+                SUTypedValueSetString(typedVal, value.c_str());
+                SUAttributeDictionarySetValue(dict, attrKey.c_str(), typedVal);
+                SUTypedValueRelease(&typedVal);
+            }
+        }
+
+        // 4. Registra no modelo ANTES do erase
+        SUModelAddComponentDefinitions(model, 1, &newDef);
+
+        // 5. Apaga instâncias da raiz
+        std::vector<SUEntityRef> toErase(instanceCount);
+        for (size_t i = 0; i < instanceCount; ++i)
+            toErase[i] = SUComponentInstanceToEntity(instances[i]);
+        SUEntitiesErase(modelEntities, instanceCount, toErase.data());
+
+        // 6. Popula nova def com o snapshot
+        SUEntitiesRef newEntities = SU_INVALID;
+        SUComponentDefinitionGetEntities(newDef, &newEntities);
+        for (auto &data : snapshot)
+        {
+            SUComponentInstanceRef newInst = SU_INVALID;
+            SUComponentDefinitionCreateInstance(data.def, &newInst);
+            SUComponentInstanceSetTransform(newInst, &data.transform);
+            SUEntitiesAddInstance(newEntities, newInst, nullptr);
+        }
+
+        // 7. Instancia na raiz
+        SUComponentInstanceRef rootInst = SU_INVALID;
+        SUComponentDefinitionCreateInstance(newDef, &rootInst);
+        SUEntitiesAddInstance(modelEntities, rootInst, nullptr);
+
+        return SU_ERROR_NONE;
+    }
+
 };

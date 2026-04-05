@@ -5,6 +5,8 @@
 #include "oatpp/web/server/HttpConnectionHandler.hpp"
 #include "oatpp/core/base/Environment.hpp"
 #include "controller/SketchUpController.hpp"
+#include "controller/TempFileController.hpp"
+
 #include "AppComponent.hpp"
 
 #include <iostream>
@@ -33,7 +35,7 @@ namespace
 void registerControllers(const std::shared_ptr<oatpp::web::server::HttpRouter> &router)
 {
     router->addController(SketchUpController::createShared());
-    // router->addController(OutroController::createShared());
+    router->addController(TempFileController::createShared());
 }
 
 // -------------------------------------------------------
