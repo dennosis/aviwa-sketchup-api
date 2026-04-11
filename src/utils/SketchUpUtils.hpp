@@ -10,7 +10,6 @@
 #include "model/SketchUpComponentModel.hpp"
 #include <unordered_map>
 
-// Alias definido no header do controller ou num utils.hpp
 using ComponentAttributes = std::unordered_map<std::string, std::string>;
 
 class SketchUpUtils
@@ -169,24 +168,22 @@ public:
         return result;
     }
 
-    static SUResult loadModel(const std::string &filepath, SUModelRef &out_model)
+    static SUResult loadModel(const std::string &filePath, SUModelRef &outModel)
     {
-        out_model = SU_INVALID;
+        outModel = SU_INVALID;
 
-        // Inicialize o status com o valor padrão de sucesso
         SUModelLoadStatus status = SUModelLoadStatus_Success;
 
-        SUResult res = SUModelCreateFromFileWithStatus(&out_model, filepath.c_str(), &status);
+        SUResult res = SUModelCreateFromFileWithStatus(&outModel, filePath.c_str(), &status);
 
         if (res != SU_ERROR_NONE)
         {
             return res;
         }
 
-        // Use a constante DIRETAMENTE sem o prefixo SUModelLoadStatus::
         if (status == SUModelLoadStatus_Success_MoreRecent)
         {
-            OATPP_LOGW("SketchUpUtils", "Aviso: O arquivo '%s' e de uma versao mais nova.", filepath.c_str());
+            OATPP_LOGW("SketchUpUtils", "Aviso: O arquivo '%s' e de uma versao mais nova.", filePath.c_str());
         }
 
         return SU_ERROR_NONE;
@@ -196,38 +193,29 @@ public:
     {
         SUAttributeDictionaryRef dict = SU_INVALID;
 
-        // 1. Tenta pegar o dicionário existente pelo nome
         SUResult res = SUEntityGetAttributeDictionary(entity, dictName.c_str(), &dict);
 
-        // 2. Se não existir (SU_ERROR_NO_DATA ou similar), precisamos criar e adicionar
         if (res != SU_ERROR_NONE)
         {
-            // Cria o objeto de dicionário de atributos com o nome desejado
             res = SUAttributeDictionaryCreate(&dict, dictName.c_str());
             if (res != SU_ERROR_NONE)
                 return res;
 
-            // Adiciona o dicionário recém-criado à entidade
             res = SUEntityAddAttributeDictionary(entity, dict);
 
             if (res != SU_ERROR_NONE)
             {
-                // Se falhou ao adicionar, precisamos liberar a memória do dicionário que criamos
                 SUAttributeDictionaryRelease(&dict);
                 return res;
             }
-            // IMPORTANTE: Após SUEntityAddAttributeDictionary ter sucesso,
-            // a entidade assume a posse (ownership), então NÃO chamamos Release aqui.
         }
 
-        // 3. Agora que temos um dicionário válido (existente ou novo), gravamos o valor
         return SUAttributeDictionarySetValue(dict, key.c_str(), value);
     }
 
     static SUResult setAttributeWithValidation(SUComponentInstanceRef instance, const std::string &dictName, const std::string &key, SUTypedValueRef value)
     {
 
-        // 1. Verificar se o atributo existe na INSTÂNCIA
         SUAttributeDictionaryRef instDict = SU_INVALID;
         bool existsInInstance = false;
         if (SUEntityGetAttributeDictionary(SUComponentInstanceToEntity(instance), dictName.c_str(), &instDict) == SU_ERROR_NONE)
@@ -241,7 +229,6 @@ public:
             SUTypedValueRelease(&testVal);
         }
 
-        // 2. Se não existir na instância, verificar na DEFINIÇÃO
         bool existsInDefinition = false;
         SUComponentDefinitionRef def = SU_INVALID;
         SUComponentInstanceGetDefinition(instance, &def);
@@ -258,15 +245,13 @@ public:
             SUTypedValueRelease(&testVal);
         }
 
-        // 3. Validação final: se não existe em nenhum dos dois, dispara erro
         if (!existsInInstance && !existsInDefinition)
         {
             OATPP_LOGE("SketchUpUtils", "Erro: Atributo '%s' nao encontrado na instancia nem na definicao.", key.c_str());
             return SU_ERROR_INVALID_ARGUMENT;
         }
 
-        // 4. Se passou na validação, grava o valor na INSTÂNCIA
-        // (Lembre-se: mesmo que exista só na definição, a alteração de valor deve ser gravada na instância)
+
         return setRawAttribute(SUComponentInstanceToEntity(instance), dictName, key, value);
     }
 
@@ -276,11 +261,8 @@ public:
         if (SUIsInvalid(definition))
             return SU_ERROR_INVALID_INPUT;
 
-        // Converter a Definition para Entity para poder manipular atributos
         SUEntityRef entity = SUComponentDefinitionToEntity(definition);
 
-        // Na definição, não validamos se existe. Se não existir, o setRawAttribute
-        // (que criamos antes) já cuida de criar o dicionário e a chave.
         SUResult res = setRawAttribute(entity, dictName, key, value);
 
         if (res == SU_ERROR_NONE)
@@ -300,7 +282,6 @@ public:
         if (SUIsInvalid(entities))
             return SU_INVALID;
 
-        // 1. Tentar encontrar entre as Instâncias de Componentes
         size_t instanceCount = 0;
         SUEntitiesGetNumInstances(entities, &instanceCount);
         if (instanceCount > 0)
@@ -315,7 +296,6 @@ public:
                     return SUComponentInstanceToEntity(instance);
                 }
 
-                // Busca recursiva dentro da definição deste componente (filhos)
                 SUComponentDefinitionRef def = SU_INVALID;
                 SUComponentInstanceGetDefinition(instance, &def);
                 SUEntitiesRef childEntities = SU_INVALID;
@@ -327,7 +307,6 @@ public:
             }
         }
 
-        // 2. Tentar encontrar entre os Grupos
         size_t groupCount = 0;
         SUEntitiesGetNumGroups(entities, &groupCount);
         if (groupCount > 0)
@@ -342,7 +321,6 @@ public:
                     return SUGroupToEntity(group);
                 }
 
-                // Busca recursiva dentro do grupo
                 SUEntitiesRef groupEntities = SU_INVALID;
                 SUGroupGetEntities(group, &groupEntities);
 
@@ -397,7 +375,6 @@ public:
             SUStringRef suGuid = SU_INVALID;
             SUStringCreate(&suGuid);
 
-            // Obtém o GUID da definição
             if (SUComponentDefinitionGetGuid(def, &suGuid) == SU_ERROR_NONE)
             {
                 std::string currentGuid = suStringToStd(suGuid);
@@ -432,7 +409,6 @@ public:
         std::vector<SUComponentInstanceRef> instances(instanceCount, SU_INVALID);
         SUEntitiesGetInstances(modelEntities, instanceCount, instances.data(), &instanceCount);
 
-        // 1. Snapshot
         struct InstData
         {
             SUComponentDefinitionRef def;
@@ -447,18 +423,14 @@ public:
             SUComponentInstanceGetTransform(instances[i], &snapshot[i].transform);
         }
 
-        // 2. Cria definição com o nome recebido
         SUComponentDefinitionRef newDef = SU_INVALID;
         res = SUComponentDefinitionCreate(&newDef);
         if (res != SU_ERROR_NONE)
             return res;
         SUComponentDefinitionSetName(newDef, defName.c_str());
 
-        // 3. Aplica atributos opcionais via SUEntityGetAttributeDictionary
-        //    Chave no formato "dictName:attrKey"
         if (!attributes.empty())
         {
-            // ✅ SUComponentDefinition é uma SUEntity — cast correto
             SUEntityRef defEntity = SUComponentDefinitionToEntity(newDef);
 
             for (const auto &[rawKey, value] : attributes)
@@ -470,7 +442,6 @@ public:
                 std::string dictName = rawKey.substr(0, sep);
                 std::string attrKey = rawKey.substr(sep + 1);
 
-                // ✅ função correta do SDK
                 SUAttributeDictionaryRef dict = SU_INVALID;
                 SUEntityGetAttributeDictionary(defEntity, dictName.c_str(), &dict);
 
@@ -482,16 +453,13 @@ public:
             }
         }
 
-        // 4. Registra no modelo ANTES do erase
         SUModelAddComponentDefinitions(model, 1, &newDef);
 
-        // 5. Apaga instâncias da raiz
         std::vector<SUEntityRef> toErase(instanceCount);
         for (size_t i = 0; i < instanceCount; ++i)
             toErase[i] = SUComponentInstanceToEntity(instances[i]);
         SUEntitiesErase(modelEntities, instanceCount, toErase.data());
 
-        // 6. Popula nova def com o snapshot
         SUEntitiesRef newEntities = SU_INVALID;
         SUComponentDefinitionGetEntities(newDef, &newEntities);
         for (auto &data : snapshot)
@@ -502,12 +470,10 @@ public:
             SUEntitiesAddInstance(newEntities, newInst, nullptr);
         }
 
-        // 7. Instancia na raiz
         SUComponentInstanceRef rootInst = SU_INVALID;
         SUComponentDefinitionCreateInstance(newDef, &rootInst);
         SUEntitiesAddInstance(modelEntities, rootInst, nullptr);
 
         return SU_ERROR_NONE;
     }
-
 };

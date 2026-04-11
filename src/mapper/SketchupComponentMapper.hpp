@@ -58,7 +58,6 @@ public:
         auto dto = ItemNodeDto::createShared();
         dto->children = oatpp::List<oatpp::Object<ItemNodeDto>>::createShared();
 
-        // Visitando o std::variant
         if (std::holds_alternative<InstanceTypeNode>(node.item))
         {
             auto const &data = std::get<InstanceTypeNode>(node.item);
@@ -66,7 +65,6 @@ public:
             dto->name = data.name.c_str();
             dto->guid = data.guid.c_str();
 
-            // Criar o objeto interno de definição
             auto defDto = DefinitionDto::createShared();
             defDto->name = data.definition.name.c_str();
             defDto->guid = data.definition.guid.c_str();

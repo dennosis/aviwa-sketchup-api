@@ -10,6 +10,7 @@
 #include "oatpp/core/macro/codegen.hpp"
 #include "oatpp/core/macro/component.hpp"
 #include "oatpp/parser/json/mapping/ObjectMapper.hpp"
+#include "model/TempFileModel.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -21,27 +22,21 @@ namespace mp = oatpp::web::mime::multipart;
 class TempFileController : public oatpp::web::server::api::ApiController
 {
 private:
-    std::shared_ptr<std::string> m_tempPath;
+    OATPP_COMPONENT(std::shared_ptr<TempPath>, m_tempPath);
 
 public:
-    TempFileController(const std::shared_ptr<oatpp::data::mapping::ObjectMapper> &objectMapper,
-                       const std::shared_ptr<std::string> &tempPath)
-        : oatpp::web::server::api::ApiController(objectMapper), m_tempPath(tempPath)
+    TempFileController(const std::shared_ptr<oatpp::data::mapping::ObjectMapper> &objectMapper)
+        : oatpp::web::server::api::ApiController(objectMapper)
     {
-        // Inicializa o TempFileManager com o mesmo diretório do projeto
-        TempFileManager::instance().init(*tempPath);
+        TempFileManager::instance().init(m_tempPath->value);
     }
 
     static std::shared_ptr<TempFileController> createShared()
     {
         OATPP_COMPONENT(std::shared_ptr<oatpp::data::mapping::ObjectMapper>, objectMapper);
-        OATPP_COMPONENT(std::shared_ptr<std::string>, tempPath);
-        return std::make_shared<TempFileController>(objectMapper, tempPath);
+        return std::make_shared<TempFileController>(objectMapper);
     }
 
-    // ------------------------------------------------------------------
-    // POST /temp/upload
-    // ------------------------------------------------------------------
     ENDPOINT("POST", "/temp/upload", uploadFile,
              REQUEST(std::shared_ptr<IncomingRequest>, request))
     {
@@ -59,17 +54,15 @@ public:
 
         std::string originalName = part->getFilename()->c_str();
 
-        // MIME type
         std::string mimeType = "application/octet-stream";
         auto ctHeader = part->getHeaders().get("Content-Type");
         if (ctHeader)
             mimeType = ctHeader->c_str();
 
-        // Grava em m_tempPath
-        fs::path destPath = fs::path(*m_tempPath) / (std::to_string(std::chrono::steady_clock::now()
-                                                                        .time_since_epoch()
-                                                                        .count()) +
-                                                     "_" + originalName);
+        fs::path destPath = fs::path(m_tempPath->value) / (std::to_string(std::chrono::steady_clock::now()
+                                                                              .time_since_epoch()
+                                                                              .count()) +
+                                                           "_" + originalName);
 
         {
             std::ofstream ofs(destPath, std::ios::binary);
@@ -101,32 +94,6 @@ public:
         return response;
     }
 
-    // ------------------------------------------------------------------
-    // POST /temp/{id}/process
-    // ------------------------------------------------------------------
-    ENDPOINT("POST", "/temp/{id}/process", processFile,
-             PATH(String, id),
-             BODY_STRING(String, body))
-    {
-        auto entry = TempFileManager::instance().get(id->c_str());
-        OATPP_ASSERT_HTTP(entry.has_value(), Status::CODE_404,
-                          "Arquivo temporário não encontrado ou expirado");
-
-        // Sua lógica de negócio aqui com entry->filepath e body->c_str()
-
-        auto json = oatpp::String(buildJson({{"id", std::string(id->c_str())},
-                                             {"status", "processed"},
-                                             {"path", entry->filepath.string()},
-                                             {"originalName", entry->originalName}}));
-
-        auto response = createResponse(Status::CODE_200, json);
-        response->putHeader("Content-Type", "application/json");
-        return response;
-    }
-
-    // ------------------------------------------------------------------
-    // DELETE /temp/{id}
-    // ------------------------------------------------------------------
     ENDPOINT("DELETE", "/temp/{id}", deleteFile,
              PATH(String, id))
     {

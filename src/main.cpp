@@ -6,6 +6,7 @@
 #include "oatpp/core/base/Environment.hpp"
 #include "controller/SketchUpController.hpp"
 #include "controller/TempFileController.hpp"
+#include "controller/AviwaController.hpp"
 
 #include "AppComponent.hpp"
 
@@ -36,6 +37,7 @@ void registerControllers(const std::shared_ptr<oatpp::web::server::HttpRouter> &
 {
     router->addController(SketchUpController::createShared());
     router->addController(TempFileController::createShared());
+    router->addController(AviwaController::createShared());
 }
 
 // -------------------------------------------------------

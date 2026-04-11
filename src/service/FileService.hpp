@@ -10,7 +10,6 @@
 
 namespace fs = std::filesystem;
 
-// Estrutura para representar os metadados do arquivo
 struct FileMetadata
 {
     std::string name;
@@ -22,12 +21,8 @@ struct FileMetadata
 class FileService
 {
 private:
-    /**
-     * Auxiliar para converter o tempo do filesystem para string legível
-     */
     std::string timeToString(fs::file_time_type ftime)
     {
-        // Converte para system_clock (C++20 facilita, mas para C++17 usamos este truque)
         auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
             ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
         std::time_t tt = std::chrono::system_clock::to_time_t(sctp);

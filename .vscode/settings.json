@@ -1,5 +1,13 @@
 {
-    "cmake.configureSettings": {
-        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
-    }
+  "cmake.configureSettings": {
+    "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+  },
+  "workbench.editorLargeFileConfirmation": 5,
+  "workbench.list.openMode": "doubleClick",
+  "files.associations": {
+    "*.bin": "binary",
+    "*.dat": "binary",
+    "*.exe": "binary",
+    "*.skp": "binary"
+  }
 }

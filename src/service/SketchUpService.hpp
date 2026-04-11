@@ -10,21 +10,21 @@
 #include "model/SketchUpComponentModel.hpp"
 #include "utils/SketchUpUtils.hpp"
 #include "utils/AviwaUtils.hpp"
-#include "utils/GabsterUtils.hpp"
 #include "oatpp/core/base/Environment.hpp"
 #include <string>
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include "model/TempFileModel.hpp"
 
 class SketchUpService
 {
 
 private:
-    // Função privada que faz o trabalho pesado de recursão
+    OATPP_COMPONENT(std::shared_ptr<TempPath>, m_tempPath);
+
     void fillTreeRecursive(SUEntitiesRef entities, std::vector<ItemNode> &list)
     {
-        // --- 1. PROCESSAR INSTÂNCIAS DE COMPONENTES ---
         size_t instanceCount = 0;
         SUEntitiesGetNumInstances(entities, &instanceCount);
         if (instanceCount > 0)
@@ -37,20 +37,16 @@ private:
                 ItemNode node;
                 InstanceTypeNode instanceData;
 
-                // Dados da Instância
                 instanceData.name = SketchUpUtils::getInstanceName(inst);
                 instanceData.guid = SketchUpUtils::getInstanceGuid(inst);
 
-                // Dados da Definição (O componente pai)
                 SUComponentDefinitionRef def = SU_INVALID;
                 SUComponentInstanceGetDefinition(inst, &def);
                 instanceData.definition.name = SketchUpUtils::getDefinitionName(def);
                 instanceData.definition.guid = SketchUpUtils::getDefinitionGuid(def);
 
-                // Atribui ao variant
                 node.item = instanceData;
 
-                // RECURSÃO: Busca filhos dentro da definição deste componente
                 SUEntitiesRef subEntities = SU_INVALID;
                 SUComponentDefinitionGetEntities(def, &subEntities);
                 fillTreeRecursive(subEntities, node.children);
@@ -59,7 +55,6 @@ private:
             }
         }
 
-        // --- 2. PROCESSAR GRUPOS ---
         size_t groupCount = 0;
         SUEntitiesGetNumGroups(entities, &groupCount);
         if (groupCount > 0)
@@ -75,10 +70,8 @@ private:
                 groupData.name = SketchUpUtils::getGroupName(grp);
                 groupData.guid = SketchUpUtils::getGroupGuid(grp);
 
-                // Atribui ao variant
                 node.item = groupData;
 
-                // RECURSÃO: Busca filhos dentro do grupo
                 SUEntitiesRef subEntities = SU_INVALID;
                 SUGroupGetEntities(grp, &subEntities);
                 fillTreeRecursive(subEntities, node.children);
@@ -86,6 +79,50 @@ private:
                 list.push_back(node);
             }
         }
+    }
+
+    template <typename TEntity>
+    std::string applyAttributeUpdate(
+        const std::string &filepath,
+        const std::string &dictName,
+        const std::string &key,
+        const std::string &value,
+        std::function<TEntity(SUModelRef)> resolver,
+        std::function<SUResult(TEntity, const std::string &,
+                               const std::string &, SUTypedValueRef)>
+            setter)
+    {
+        auto skpPath = std::filesystem::path(m_tempPath->value) /
+                       ("file_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".skp");
+
+        SUInitialize();
+
+        SUModelRef model = SU_INVALID;
+        if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
+        {
+            SUTerminate();
+            throw std::runtime_error("Erro ao carregar modelo");
+        }
+
+        TEntity target = resolver(model);
+        if (!SUIsValid(target))
+        {
+            SUModelRelease(&model);
+            SUTerminate();
+            throw std::runtime_error("Entidade não encontrada para o GUID informado");
+        }
+
+        SUTypedValueRef typedVal = SU_INVALID;
+        SUTypedValueCreate(&typedVal);
+        SUTypedValueSetString(typedVal, value.c_str());
+
+        if (setter(target, dictName, key, typedVal) == SU_ERROR_NONE)
+            SUModelSaveToFile(model, skpPath.string().c_str());
+
+        SUTypedValueRelease(&typedVal);
+        SUModelRelease(&model);
+        SUTerminate();
+        return skpPath.string();
     }
 
 public:
@@ -131,7 +168,6 @@ public:
 
             for (size_t i = 0; i < defCount; ++i)
             {
-                // --- FILTRO DE INSTÂNCIAS ---
                 size_t instanceCount = 0;
                 SUComponentDefinitionGetNumInstances(defs[i], &instanceCount);
 
@@ -140,7 +176,6 @@ public:
                 {
                     continue;
                 }
-                // ----------------------------
 
                 ComponentData comp;
 
@@ -218,21 +253,18 @@ public:
                 ComponentData comp;
                 SUComponentInstanceRef instance = instances[i];
 
-                // 3. Pegar o NOME da Instância (pode ser diferente do nome da definição)
                 SUStringRef nameRef = SU_INVALID;
                 SUStringCreate(&nameRef);
                 SUComponentInstanceGetName(instance, &nameRef);
                 comp.name = SketchUpUtils::suStringToStd(nameRef);
                 SUStringRelease(&nameRef);
 
-                // 4. Pegar o GUID da Instância (Único para cada peça no cenário)
                 SUStringRef guidRef = SU_INVALID;
                 SUStringCreate(&guidRef);
                 SUComponentInstanceGetGuid(instance, &guidRef);
                 comp.guid = SketchUpUtils::suStringToStd(guidRef);
                 SUStringRelease(&guidRef);
 
-                // 5. Pegar Atributos da Instância
                 size_t dictCount = 0;
                 SUEntityGetNumAttributeDictionaries(SUComponentInstanceToEntity(instance), &dictCount);
 
@@ -264,17 +296,14 @@ public:
         SUInitialize();
         SUModelRef model = SU_INVALID;
 
-        // Uso da função utilitária
         if (SketchUpUtils::loadModel(filepath, model) == SU_ERROR_NONE)
         {
 
             SUEntitiesRef modelEntities = SU_INVALID;
             SUModelGetEntities(model, &modelEntities);
 
-            // Executa a recursão
             fillTreeRecursive(modelEntities, rootList);
 
-            // O Release continua aqui, pois o modelo foi "aberto" para esta operação
             SUModelRelease(&model);
         }
 
@@ -282,170 +311,44 @@ public:
         return rootList;
     }
 
-    bool updateInstanceAttribute(const std::string &filepath,
-                                 const std::string &guid,
-                                 const std::string &dictName,
-                                 const std::string &key,
-                                 const std::string &value)
+    std::string updateInstanceAttribute(const std::string &filepath,
+                                        const std::string &guid,
+                                        const std::string &dictName,
+                                        const std::string &key,
+                                        const std::string &value)
     {
-
-        SUInitialize();
-        SUModelRef model = SU_INVALID;
-        bool success = false;
-
-        if (SketchUpUtils::loadModel(filepath, model) == SU_ERROR_NONE)
-        {
-            SUEntitiesRef rootEntities = SU_INVALID;
-            SUModelGetEntities(model, &rootEntities);
-
-            // 1. Busca a entidade pelo GUID
-            SUEntityRef target = SketchUpUtils::findEntityByGuid(rootEntities, guid);
-
-            if (SUIsValid(target))
+        return applyAttributeUpdate<SUComponentInstanceRef>(
+            filepath, dictName, key, value,
+            [&](SUModelRef model)
             {
-                // Converter para o tipo ComponentInstance (necessário para a função de validação)
-                SUComponentInstanceRef instance = SUComponentInstanceFromEntity(target);
-
-                // 2. Preparar o valor
-                SUTypedValueRef typedVal = SU_INVALID;
-                SUTypedValueCreate(&typedVal);
-                SUTypedValueSetString(typedVal, value.c_str());
-
-                // 3. Chamar a função de validação do Utils
-                SUResult res = SketchUpUtils::setAttributeWithValidation(instance, dictName, key, typedVal);
-
-                if (res == SU_ERROR_NONE)
-                {
-                    SUModelSaveToFile(model, filepath.c_str());
-                    success = true;
-                }
-
-                SUTypedValueRelease(&typedVal);
-            }
-            SUModelRelease(&model);
-        }
-
-        SUTerminate();
-        return success;
+                SUEntitiesRef root = SU_INVALID;
+                SUModelGetEntities(model, &root);
+                SUEntityRef e = SketchUpUtils::findEntityByGuid(root, guid);
+                return SUComponentInstanceFromEntity(e);
+            },
+            [](SUComponentInstanceRef inst, const std::string &d,
+               const std::string &k, SUTypedValueRef v)
+            {
+                return SketchUpUtils::setAttributeWithValidation(inst, d, k, v);
+            });
     }
 
-    /**
-     * Atualiza ou cria um atributo na DEFINIÇÃO (afeta todas as instâncias)
-     */
-    bool updateDefinitionAttribute(const std::string &filepath,
-                                   const std::string &guid,
-                                   const std::string &dictName,
-                                   const std::string &key,
-                                   const std::string &value)
+    std::string updateDefinitionAttribute(const std::string &filepath,
+                                          const std::string &guid,
+                                          const std::string &dictName,
+                                          const std::string &key,
+                                          const std::string &value)
     {
-
-        SUInitialize();
-        SUModelRef model = SU_INVALID;
-        bool success = false;
-
-        if (SketchUpUtils::loadModel(filepath, model) == SU_ERROR_NONE)
-        {
-
-            // 1. Localizar a definição pelo nome
-            SUComponentDefinitionRef definition = SU_INVALID;
-            // (Assumindo que você tenha a findDefinitionByName no Utils ou implementada aqui)
-            definition = SketchUpUtils::findDefinitionByGuid(model, guid);
-
-            if (SUIsValid(definition))
+        return applyAttributeUpdate<SUComponentDefinitionRef>(
+            filepath, dictName, key, value,
+            [&](SUModelRef model)
             {
-                // 2. Preparar o valor
-                SUTypedValueRef typedVal = SU_INVALID;
-                SUTypedValueCreate(&typedVal);
-                SUTypedValueSetString(typedVal, value.c_str());
-
-                // 3. Chamar a função de criação/update do Utils
-                SUResult res = SketchUpUtils::setDefinitionAttribute(definition, dictName, key, typedVal);
-
-                if (res == SU_ERROR_NONE)
-                {
-                    SUModelSaveToFile(model, filepath.c_str());
-                    success = true;
-                }
-
-                SUTypedValueRelease(&typedVal);
-            }
-            SUModelRelease(&model);
-        }
-
-        SUTerminate();
-        return success;
-    }
-
-    bool createGabsterStructure(const std::string &filepath)
-    {
-
-        SUInitialize();
-        SUModelRef model = SU_INVALID;
-        bool success = false;
-
-        if (SketchUpUtils::loadModel(filepath, model) == SU_ERROR_NONE)
-        {
-
-            SUResult res = GabsterUtils::createGabsterStructure(model);
-
-            if (res == SU_ERROR_NONE)
+                return SketchUpUtils::findDefinitionByGuid(model, guid);
+            },
+            [](SUComponentDefinitionRef def, const std::string &d,
+               const std::string &k, SUTypedValueRef v)
             {
-                SUModelSaveToFile(model, filepath.c_str());
-                success = true;
-            }
-        }
-
-        SUTerminate();
-        return success;
-    }
-
-    bool createPaintingFile(const std::string &targetPath,
-                            const std::string &imageName,
-                            std::function<void(std::ostream *)> imageWriter,
-                            double width,
-                            double height,
-                            double thickness,
-                            std::string &outMessage)
-    {
-
-        // 1. Criar caminho temporário para a imagem
-        std::filesystem::path tmpPath = std::filesystem::temp_directory_path() / ("upload_" + imageName);
-        std::string tmpImagePath = tmpPath.string();
-
-        try
-        {
-            // 2. Salvar o stream da imagem no disco temporariamente
-            std::ofstream file(tmpImagePath, std::ios::binary);
-            imageWriter(&file);
-            file.close();
-
-            // 3. Inicializar SketchUp e Processar
-            SUInitialize();
-
-            SUResult res = AviwaUtils::createPaintingFile(targetPath, tmpImagePath, width, height, thickness);
-
-            SUTerminate();
-
-            // 4. Limpeza
-            std::filesystem::remove(tmpPath);
-
-            if (res == SU_ERROR_NONE)
-            {
-                outMessage = "Sucesso ao criar hierarquia ENTERPRISE->VOYAGER.";
-                return true;
-            }
-            else
-            {
-                outMessage = "Erro na SketchUp API: " + std::to_string(res);
-                return false;
-            }
-        }
-        catch (const std::exception &e)
-        {
-            outMessage = std::string("Erro de IO: ") + e.what();
-            if (std::filesystem::exists(tmpPath))
-                std::filesystem::remove(tmpPath);
-            return false;
-        }
+                return SketchUpUtils::setDefinitionAttribute(def, d, k, v);
+            });
     }
 };

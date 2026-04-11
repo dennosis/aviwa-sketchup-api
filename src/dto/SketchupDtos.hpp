@@ -43,10 +43,9 @@ class ItemNodeDto : public oatpp::DTO
     DTO_INIT(ItemNodeDto, DTO)
 
     DTO_FIELD(String, type); // "instance" ou "group"
-    DTO_FIELD(String, name); // Nome da instância ou do grupo
-    DTO_FIELD(String, guid); // GUID da instância ou do grupo
+    DTO_FIELD(String, name);
+    DTO_FIELD(String, guid);
 
-    // Este campo só aparecerá no JSON se for preenchido (não nulo)
     DTO_FIELD(Object<DefinitionDto>, definition);
 
     DTO_FIELD(List<Object<ItemNodeDto>>, children);
@@ -57,9 +56,9 @@ class UpdateAttributeDto : public oatpp::DTO
 
     DTO_INIT(UpdateAttributeDto, DTO)
 
-    DTO_FIELD(String, filepath, "file_path");
-    DTO_FIELD(String, guid);
-    DTO_FIELD(String, dictName, "dict_name");
+    DTO_FIELD(String, fileId, "fileId");
+    DTO_FIELD(String, guid, "guid");
+    DTO_FIELD(String, dictName, "dictName");
     DTO_FIELD(String, key);
     DTO_FIELD(String, value);
 };
@@ -69,7 +68,21 @@ class CreateGabsterStructureDto : public oatpp::DTO
 
     DTO_INIT(CreateGabsterStructureDto, DTO)
 
-    DTO_FIELD(String, filepath, "file_path");
+    DTO_FIELD(String, fileId, "fileId");
+    DTO_FIELD(String, author, "author");
+    DTO_FIELD(String, title, "title");
+    DTO_FIELD(String, code, "code");
+    DTO_FIELD(String, gbsId, "gbsId");
+    DTO_FIELD(String, description, "description");
+};
+
+class CreateInformativeImageDto : public oatpp::DTO
+{
+
+    DTO_INIT(CreateInformativeImageDto, DTO)
+    DTO_FIELD(String, fileId, "fileId");
+    DTO_FIELD(String, imageId, "imageId");
+    DTO_FIELD(String, name, "name");
 };
 
 class ResultDto : public oatpp::DTO
@@ -80,7 +93,6 @@ class ResultDto : public oatpp::DTO
     DTO_FIELD(Boolean, success);
     DTO_FIELD(String, detail);
 
-    // Método utilitário para criar instâncias rapidamente
     static Object<ResultDto> createShared(bool success, const char *detail)
     {
         auto dto = ResultDto::createShared();
@@ -96,7 +108,22 @@ class CreateSkpResultDto : public oatpp::DTO
 
     DTO_FIELD(Boolean, success);
     DTO_FIELD(String, detail);
-    DTO_FIELD(String, savedPath); // Caminho onde o arquivo foi salvo
+    DTO_FIELD(String, savedPath);
+};
+
+class CreateTexturedRectDto : public oatpp::DTO
+{
+    DTO_INIT(CreateTexturedRectDto, DTO)
+    DTO_FIELD(String, imageId, "imageId");
+    DTO_FIELD(Float64, width);
+    DTO_FIELD(Float64, height);
+    DTO_FIELD(Float64, thickness);
+};
+
+class FileVersionDto : public oatpp::DTO
+{
+    DTO_INIT(FileVersionDto, DTO)
+    DTO_FIELD(String, version);
 };
 
 #include OATPP_CODEGEN_END(DTO)

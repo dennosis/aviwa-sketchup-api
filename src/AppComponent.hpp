@@ -7,6 +7,10 @@
 #include "Config.hpp"
 #include "service/SketchUpService.hpp"
 #include "service/FileService.hpp"
+#include "service/AviwaService.hpp"
+#include "model/TempFileModel.hpp"
+#include "common/ErrorHandler.hpp"
+
 #include <filesystem>
 
 class AppComponent
@@ -44,18 +48,22 @@ public:
    */
   OATPP_CREATE_COMPONENT(std::shared_ptr<oatpp::network::ConnectionHandler>, serverConnectionHandler)([]
                                                                                                       {
-    OATPP_COMPONENT(std::shared_ptr<oatpp::web::server::HttpRouter>, router); 
-    return oatpp::web::server::HttpConnectionHandler::createShared(router); }());
+                                                                                                        OATPP_COMPONENT(std::shared_ptr<oatpp::web::server::HttpRouter>, router);
+                                                                                                        OATPP_COMPONENT(std::shared_ptr<oatpp::data::mapping::ObjectMapper>, objectMapper);
 
-  // Criamos o componente do Service
+                                                                                                        auto handler = oatpp::web::server::HttpConnectionHandler::createShared(router);
+                                                                                                        handler->setErrorHandler(std::make_shared<ErrorHandler>(objectMapper));
+                                                                                                        return handler; }());
+
+  OATPP_CREATE_COMPONENT(std::shared_ptr<TempPath>, tempPath)([]
+                                                              { return std::make_shared<TempPath>(Config::getTempPath()); }());
+
   OATPP_CREATE_COMPONENT(std::shared_ptr<SketchUpService>, sketchUpService)([]
                                                                             { return std::make_shared<SketchUpService>(); }());
 
-  // ... dentro da classe AppComponent ...
   OATPP_CREATE_COMPONENT(std::shared_ptr<FileService>, fileService)([]
                                                                     { return std::make_shared<FileService>(); }());
 
-  OATPP_CREATE_COMPONENT(std::shared_ptr<std::string>, tempPath)([]                                                      {
-    auto path = std::make_shared<std::string>(Config::getTempPath());
-    return path; }());
+  OATPP_CREATE_COMPONENT(std::shared_ptr<AviwaService>, aviwaService)([]
+                                                                      { return std::make_shared<AviwaService>(); }());
 };
