@@ -8,20 +8,100 @@
 #include <SketchUpAPI/model/entities.h>
 #include <SketchUpAPI/model/component_instance.h>
 #include "model/SketchUpComponentModel.hpp"
+#include "model/SketchUpComponentAttribute.hpp"
+#include "model/TempFileModel.hpp"
 #include "utils/SketchUpUtils.hpp"
 #include "utils/AviwaUtils.hpp"
 #include "oatpp/core/base/Environment.hpp"
-#include <string>
-#include <vector>
+
+#include <chrono>
 #include <filesystem>
 #include <fstream>
-#include "model/TempFileModel.hpp"
+#include <functional>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 class SketchUpService
 {
 
 private:
     OATPP_COMPONENT(std::shared_ptr<TempPath>, m_tempPath);
+
+    struct SuScope
+    {
+        SuScope() { SUInitialize(); }
+        ~SuScope() { SUTerminate(); }
+    };
+
+    template <typename Fn>
+    std::string withModelGuard(const std::string &filepath, Fn &&fn)
+    {
+        SuScope su;
+
+        SUModelRef model = SU_INVALID;
+        if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
+            OATPP_ASSERT_HTTP(false, Status::CODE_500, "Erro ao carregar modelo");
+
+        try
+        {
+            fn(model);
+
+            SUResult res = SUModelSaveToFile(model, filepath.c_str());
+            SUModelRelease(&model);
+
+            OATPP_ASSERT_HTTP(res == SU_ERROR_NONE, Status::CODE_500,
+                              "Erro ao salvar modelo");
+
+            return filepath;
+        }
+        catch (const std::exception &e)
+        {
+            SUModelRelease(&model);
+            OATPP_ASSERT_HTTP(false, Status::CODE_500, e.what());
+        }
+    }
+
+    template <typename TEntity>
+    void applyAttributeUpdates(
+        SUModelRef model,
+        const std::vector<SketchUpComponentAttribute> &attributes,
+        std::function<TEntity(SUModelRef)> resolver,
+        std::function<SUResult(TEntity, const std::string &,
+                               const std::string &, SUTypedValueRef)>
+            setter)
+    {
+        TEntity target = resolver(model);
+        if (!SUIsValid(target))
+            throw std::runtime_error("Entidade não encontrada para o GUID informado");
+
+        std::vector<std::string> errors;
+        for (const auto &upd : attributes)
+        {
+            SUTypedValueRef typedVal = SU_INVALID;
+            SUTypedValueCreate(&typedVal);
+            SUTypedValueSetString(typedVal, upd.value.c_str());
+
+            SUResult r = setter(target, upd.dictName, upd.key, typedVal);
+            SUTypedValueRelease(&typedVal);
+
+            if (r != SU_ERROR_NONE)
+                errors.push_back("dict=" + upd.dictName + " key=" + upd.key +
+                                 " err=" + std::to_string(r));
+        }
+
+        if (!errors.empty())
+        {
+            std::string joined;
+            for (size_t i = 0; i < errors.size(); ++i)
+            {
+                if (i > 0)
+                    joined += "; ";
+                joined += errors[i];
+            }
+            throw std::runtime_error("Partial failure: " + joined);
+        }
+    }
 
     void fillTreeRecursive(SUEntitiesRef entities, std::vector<ItemNode> &list)
     {
@@ -81,82 +161,32 @@ private:
         }
     }
 
-    template <typename TEntity>
-    std::string applyAttributeUpdate(
-        const std::string &filepath,
-        const std::string &dictName,
-        const std::string &key,
-        const std::string &value,
-        std::function<TEntity(SUModelRef)> resolver,
-        std::function<SUResult(TEntity, const std::string &,
-                               const std::string &, SUTypedValueRef)>
-            setter)
-    {
-        auto skpPath = std::filesystem::path(m_tempPath->value) /
-                       ("file_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".skp");
-
-        SUInitialize();
-
-        SUModelRef model = SU_INVALID;
-        if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
-        {
-            SUTerminate();
-            throw std::runtime_error("Erro ao carregar modelo");
-        }
-
-        TEntity target = resolver(model);
-        if (!SUIsValid(target))
-        {
-            SUModelRelease(&model);
-            SUTerminate();
-            throw std::runtime_error("Entidade não encontrada para o GUID informado");
-        }
-
-        SUTypedValueRef typedVal = SU_INVALID;
-        SUTypedValueCreate(&typedVal);
-        SUTypedValueSetString(typedVal, value.c_str());
-
-        if (setter(target, dictName, key, typedVal) == SU_ERROR_NONE)
-            SUModelSaveToFile(model, skpPath.string().c_str());
-
-        SUTypedValueRelease(&typedVal);
-        SUModelRelease(&model);
-        SUTerminate();
-        return skpPath.string();
-    }
-
 public:
     std::string getSkpVersion(const std::string &filepath)
     {
-        SUInitialize();
-        SUModelRef model = SU_INVALID;
+        SuScope su;
 
+        SUModelRef model = SU_INVALID;
         if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
-        {
-            SUTerminate();
             return "Erro: Nao foi possivel abrir o arquivo";
-        }
 
         int major = 0, minor = 0, build = 0;
         SUModelGetVersion(model, &major, &minor, &build);
         SUModelRelease(&model);
-        SUTerminate();
 
-        return std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(build);
+        return std::to_string(major) + "." +
+               std::to_string(minor) + "." +
+               std::to_string(build);
     }
 
     std::vector<ComponentData> getDefinitionsAttributes(const std::string &filepath)
     {
         std::vector<ComponentData> result;
-        SUInitialize();
+        SuScope su;
+
         SUModelRef model = SU_INVALID;
         if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
-
-        {
-            // NOTE: colcoar um erro
-            SUTerminate();
             return result;
-        }
 
         size_t defCount = 0;
         SUModelGetNumComponentDefinitions(model, &defCount);
@@ -171,49 +201,43 @@ public:
                 size_t instanceCount = 0;
                 SUComponentDefinitionGetNumInstances(defs[i], &instanceCount);
 
-                // NOTE: Se não houver nenhuma cópia deste componente no modelo, pula para o próximo
+                // Se não houver nenhuma cópia deste componente no modelo, pula
                 if (instanceCount == 0)
-                {
                     continue;
-                }
 
                 ComponentData comp;
 
-                // Nome
                 SUStringRef nameRef = SU_INVALID;
                 SUStringCreate(&nameRef);
                 SUComponentDefinitionGetName(defs[i], &nameRef);
                 comp.name = SketchUpUtils::suStringToStd(nameRef);
                 SUStringRelease(&nameRef);
 
-                // GUID
                 SUStringRef guidRef = SU_INVALID;
                 SUStringCreate(&guidRef);
                 SUComponentDefinitionGetGuid(defs[i], &guidRef);
                 comp.guid = SketchUpUtils::suStringToStd(guidRef);
                 SUStringRelease(&guidRef);
 
-                // Descrição
                 SUStringRef descRef = SU_INVALID;
                 SUStringCreate(&descRef);
                 SUComponentDefinitionGetDescription(defs[i], &descRef);
                 comp.description = SketchUpUtils::suStringToStd(descRef);
                 SUStringRelease(&descRef);
 
-                // Atributos (Dicionários)
                 size_t dictCount = 0;
-                SUEntityGetNumAttributeDictionaries(SUComponentDefinitionToEntity(defs[i]), &dictCount);
+                SUEntityGetNumAttributeDictionaries(
+                    SUComponentDefinitionToEntity(defs[i]), &dictCount);
 
                 if (dictCount > 0)
                 {
                     std::vector<SUAttributeDictionaryRef> dicts(dictCount);
-                    SUEntityGetAttributeDictionaries(SUComponentDefinitionToEntity(defs[i]),
-                                                     dictCount, dicts.data(), &dictCount);
+                    SUEntityGetAttributeDictionaries(
+                        SUComponentDefinitionToEntity(defs[i]),
+                        dictCount, dicts.data(), &dictCount);
 
                     for (size_t d = 0; d < dictCount; ++d)
-                    {
                         comp.dictionaries.push_back(SketchUpUtils::readDictionary(dicts[d]));
-                    }
                 }
 
                 result.push_back(comp);
@@ -221,21 +245,17 @@ public:
         }
 
         SUModelRelease(&model);
-        SUTerminate();
         return result;
     }
 
     std::vector<ComponentData> getInstancesAttributes(const std::string &filepath)
     {
         std::vector<ComponentData> result;
-        SUInitialize();
-        SUModelRef model = SU_INVALID;
+        SuScope su;
 
+        SUModelRef model = SU_INVALID;
         if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
-        {
-            SUTerminate();
             return result;
-        }
 
         SUEntitiesRef entities = SU_INVALID;
         SUModelGetEntities(model, &entities);
@@ -266,18 +286,18 @@ public:
                 SUStringRelease(&guidRef);
 
                 size_t dictCount = 0;
-                SUEntityGetNumAttributeDictionaries(SUComponentInstanceToEntity(instance), &dictCount);
+                SUEntityGetNumAttributeDictionaries(
+                    SUComponentInstanceToEntity(instance), &dictCount);
 
                 if (dictCount > 0)
                 {
                     std::vector<SUAttributeDictionaryRef> dicts(dictCount);
-                    SUEntityGetAttributeDictionaries(SUComponentInstanceToEntity(instance),
-                                                     dictCount, dicts.data(), &dictCount);
+                    SUEntityGetAttributeDictionaries(
+                        SUComponentInstanceToEntity(instance),
+                        dictCount, dicts.data(), &dictCount);
 
                     for (size_t d = 0; d < dictCount; ++d)
-                    {
                         comp.dictionaries.push_back(SketchUpUtils::readDictionary(dicts[d]));
-                    }
                 }
 
                 result.push_back(comp);
@@ -285,70 +305,75 @@ public:
         }
 
         SUModelRelease(&model);
-        SUTerminate();
         return result;
     }
 
     std::vector<ItemNode> getModelTree(const std::string &filepath)
     {
         std::vector<ItemNode> rootList;
+        SuScope su;
 
-        SUInitialize();
         SUModelRef model = SU_INVALID;
-
         if (SketchUpUtils::loadModel(filepath, model) == SU_ERROR_NONE)
         {
-
             SUEntitiesRef modelEntities = SU_INVALID;
             SUModelGetEntities(model, &modelEntities);
-
             fillTreeRecursive(modelEntities, rootList);
-
             SUModelRelease(&model);
         }
 
-        SUTerminate();
         return rootList;
     }
 
     std::string updateInstanceAttribute(const std::string &filepath,
                                         const std::string &guid,
-                                        const std::string &dictName,
-                                        const std::string &key,
-                                        const std::string &value)
+                                        const std::vector<SketchUpComponentAttribute> &attributes)
     {
-        return applyAttributeUpdate<SUComponentInstanceRef>(
-            filepath, dictName, key, value,
-            [&](SUModelRef model)
-            {
-                SUEntitiesRef root = SU_INVALID;
-                SUModelGetEntities(model, &root);
-                SUEntityRef e = SketchUpUtils::findEntityByGuid(root, guid);
-                return SUComponentInstanceFromEntity(e);
-            },
-            [](SUComponentInstanceRef inst, const std::string &d,
-               const std::string &k, SUTypedValueRef v)
-            {
-                return SketchUpUtils::setAttributeWithValidation(inst, d, k, v);
-            });
+        return withModelGuard(filepath, [&](SUModelRef model)
+                              { applyAttributeUpdates<SUComponentInstanceRef>(
+                                    model, attributes,
+                                    [&](SUModelRef m)
+                                    {
+                                        SUEntitiesRef root = SU_INVALID;
+                                        SUModelGetEntities(m, &root);
+                                        SUEntityRef e = SketchUpUtils::findEntityByGuid(root, guid);
+                                        return SUComponentInstanceFromEntity(e);
+                                    },
+                                    [](SUComponentInstanceRef inst, const std::string &d,
+                                       const std::string &k, SUTypedValueRef v)
+                                    {
+                                        return SketchUpUtils::setAttributeWithValidation(inst, d, k, v);
+                                    }); });
     }
 
     std::string updateDefinitionAttribute(const std::string &filepath,
                                           const std::string &guid,
-                                          const std::string &dictName,
-                                          const std::string &key,
-                                          const std::string &value)
+                                          const std::vector<SketchUpComponentAttribute> &attributes)
     {
-        return applyAttributeUpdate<SUComponentDefinitionRef>(
-            filepath, dictName, key, value,
-            [&](SUModelRef model)
-            {
-                return SketchUpUtils::findDefinitionByGuid(model, guid);
-            },
-            [](SUComponentDefinitionRef def, const std::string &d,
-               const std::string &k, SUTypedValueRef v)
-            {
-                return SketchUpUtils::setDefinitionAttribute(def, d, k, v);
-            });
+        return withModelGuard(filepath, [&](SUModelRef model)
+                              { applyAttributeUpdates<SUComponentDefinitionRef>(
+                                    model, attributes,
+                                    [&](SUModelRef m)
+                                    {
+                                        return SketchUpUtils::findDefinitionByGuid(m, guid);
+                                    },
+                                    [](SUComponentDefinitionRef def, const std::string &d,
+                                       const std::string &k, SUTypedValueRef v)
+                                    {
+                                        return SketchUpUtils::setDefinitionAttribute(def, d, k, v);
+                                    }); });
+    }
+
+    std::string createWrapComponent(
+        const std::string &filepath,
+        const std::string &name,
+        const std::vector<SketchUpComponentAttribute> &attributes = {})
+    {
+        return withModelGuard(filepath, [&](SUModelRef model)
+                              {
+            SUResult res = SketchUpUtils::wrapRootInstances(model, name, attributes);
+            if (res != SU_ERROR_NONE)
+                throw std::runtime_error(
+                    "Erro ao criar estrutura Gabster: " + std::to_string(res)); });
     }
 };

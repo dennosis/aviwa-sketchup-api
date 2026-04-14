@@ -251,7 +251,6 @@ public:
             return SU_ERROR_INVALID_ARGUMENT;
         }
 
-
         return setRawAttribute(SUComponentInstanceToEntity(instance), dictName, key, value);
     }
 
@@ -394,7 +393,8 @@ public:
         return SU_INVALID;
     }
 
-    static SUResult wrapRootInstances(SUModelRef model, const std::string &defName, const ComponentAttributes &attributes = {})
+    static SUResult wrapRootInstances(SUModelRef model, const std::string &defName,
+                                      const std::vector<SketchUpComponentAttribute> &attributes = {})
     {
         SUEntitiesRef modelEntities = SU_INVALID;
         SUResult res = SUModelGetEntities(model, &modelEntities);
@@ -433,22 +433,15 @@ public:
         {
             SUEntityRef defEntity = SUComponentDefinitionToEntity(newDef);
 
-            for (const auto &[rawKey, value] : attributes)
+            for (const auto &attr : attributes)
             {
-                auto sep = rawKey.find(':');
-                if (sep == std::string::npos)
-                    continue;
-
-                std::string dictName = rawKey.substr(0, sep);
-                std::string attrKey = rawKey.substr(sep + 1);
-
                 SUAttributeDictionaryRef dict = SU_INVALID;
-                SUEntityGetAttributeDictionary(defEntity, dictName.c_str(), &dict);
+                SUEntityGetAttributeDictionary(defEntity, attr.dictName.c_str(), &dict);
 
                 SUTypedValueRef typedVal = SU_INVALID;
                 SUTypedValueCreate(&typedVal);
-                SUTypedValueSetString(typedVal, value.c_str());
-                SUAttributeDictionarySetValue(dict, attrKey.c_str(), typedVal);
+                SUTypedValueSetString(typedVal, attr.value.c_str());
+                SUAttributeDictionarySetValue(dict, attr.key.c_str(), typedVal);
                 SUTypedValueRelease(&typedVal);
             }
         }

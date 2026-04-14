@@ -49,32 +49,14 @@ public:
         OATPP_ASSERT_HTTP(body->width > 0 && body->height > 0,
                           Status::CODE_400, Messages::INVALID_PARAMS);
 
-        return SkpResponseBuilder::buildDownloadResponse(this,
-                                                         withTempFileGuard(body->imageId, [&](auto &entry)
-                                                                           { return m_aviwaService->createPaintingFile(
-                                                                                 entry.filepath.string(),
-                                                                                 body->width, body->height, body->thickness); }),
-                                                         "file.skp");
-    }
+        auto buffer = withTempFileGuard(body->imageId, [&](auto &entry)
+                                        {
+        auto path = m_aviwaService->createPaintingFile(
+            entry.filepath.string(),
+            body->width, body->height, body->thickness);
+        return SkpResponseBuilder::readFileToBuffer(path); });
 
-    ENDPOINT("POST", "/create/structure/gabster", createGabsterStructure,
-             BODY_DTO(Object<CreateGabsterStructureDto>, body))
-    {
-        REQUIRE_FIELD(body->fileId, "fileId");
-        REQUIRE_FIELD(body->author, "author");
-        REQUIRE_FIELD(body->title, "title");
-        REQUIRE_FIELD(body->code, "code");
-        REQUIRE_FIELD(body->gbsId, "gbsId");
-        REQUIRE_FIELD(body->description, "description");
-
-        return SkpResponseBuilder::buildDownloadResponse(this,
-                                                         withTempFileGuard(body->fileId, [&](auto &entry)
-                                                                           { return m_aviwaService->createGabsterStructure(
-                                                                                 entry.filepath.string(),
-                                                                                 body->author->c_str(), body->title->c_str(),
-                                                                                 body->code->c_str(), body->gbsId->c_str(),
-                                                                                 body->description->c_str()); }),
-                                                         "file.skp");
+        return SkpResponseBuilder::buildResponseFromBuffer(this, buffer, "file.skp");
     }
 
     ENDPOINT("POST", "/create/informative-image", createInformativeImage,
@@ -84,15 +66,18 @@ public:
         REQUIRE_FIELD(body->imageId, "imageId");
         REQUIRE_FIELD(body->name, "name");
 
-        return SkpResponseBuilder::buildDownloadResponse(
-            this,
-            withTempFileGuard(body->fileId, [&](auto &entry)
-                              { return withTempFileGuard(body->imageId, [&](auto &entry_image)
-                                                         { return m_aviwaService->AddImageAsLeftComponent(
-                                                               entry.filepath.string(),
-                                                               entry_image.filepath.string(),
-                                                               body->name->c_str()); }); }),
-            "file.skp");
+        auto buffer = withTempFileGuard(body->fileId, [&](auto &entry)
+                                        {
+        auto path = withTempFileGuard(body->imageId, [&](auto &entry_image)
+        {
+            return m_aviwaService->AddImageAsLeftComponent(
+                entry.filepath.string(),
+                entry_image.filepath.string(),
+                body->name->c_str());
+        });
+        return SkpResponseBuilder::readFileToBuffer(path); });
+
+        return SkpResponseBuilder::buildResponseFromBuffer(this, buffer, "file.skp");
     }
 };
 

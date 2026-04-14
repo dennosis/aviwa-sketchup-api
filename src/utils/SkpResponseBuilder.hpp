@@ -9,12 +9,10 @@
 
 namespace SkpResponseBuilder
 {
-
-    inline auto buildDownloadResponse(
-        oatpp::web::server::api::ApiController *controller,
-        const std::string &skpPath,
-        const std::string &filename = "model.skp")
-        -> std::shared_ptr<oatpp::web::server::api::ApiController::OutgoingResponse>
+    // -------------------------------------------------------------------------
+    // Lê um arquivo binário para um buffer e remove o arquivo do disco.
+    // -------------------------------------------------------------------------
+    inline std::shared_ptr<std::string> readFileToBuffer(const std::string &skpPath)
     {
         std::ifstream ifs(skpPath, std::ios::binary | std::ios::ate);
         OATPP_ASSERT_HTTP(ifs.is_open(), oatpp::web::protocol::http::Status::CODE_500,
@@ -28,9 +26,21 @@ namespace SkpResponseBuilder
 
         std::filesystem::remove(skpPath);
 
+        return buffer;
+    }
+
+    // -------------------------------------------------------------------------
+    // Monta a resposta de download a partir de um buffer já carregado.
+    // -------------------------------------------------------------------------
+    inline auto buildResponseFromBuffer(
+        oatpp::web::server::api::ApiController *controller,
+        const std::shared_ptr<std::string> &buffer,
+        const std::string &filename = "model.skp")
+        -> std::shared_ptr<oatpp::web::server::api::ApiController::OutgoingResponse>
+    {
         auto response = controller->createResponse(
             oatpp::web::protocol::http::Status::CODE_200,
-            oatpp::String(buffer->c_str(), size));
+            oatpp::String(buffer->c_str(), buffer->size()));
 
         response->putHeader("Content-Type", "application/octet-stream");
         response->putHeader("Content-Disposition",

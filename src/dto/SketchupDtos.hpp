@@ -51,31 +51,6 @@ class ItemNodeDto : public oatpp::DTO
     DTO_FIELD(List<Object<ItemNodeDto>>, children);
 };
 
-class UpdateAttributeDto : public oatpp::DTO
-{
-
-    DTO_INIT(UpdateAttributeDto, DTO)
-
-    DTO_FIELD(String, fileId, "fileId");
-    DTO_FIELD(String, guid, "guid");
-    DTO_FIELD(String, dictName, "dictName");
-    DTO_FIELD(String, key);
-    DTO_FIELD(String, value);
-};
-
-class CreateGabsterStructureDto : public oatpp::DTO
-{
-
-    DTO_INIT(CreateGabsterStructureDto, DTO)
-
-    DTO_FIELD(String, fileId, "fileId");
-    DTO_FIELD(String, author, "author");
-    DTO_FIELD(String, title, "title");
-    DTO_FIELD(String, code, "code");
-    DTO_FIELD(String, gbsId, "gbsId");
-    DTO_FIELD(String, description, "description");
-};
-
 class CreateInformativeImageDto : public oatpp::DTO
 {
 
@@ -83,23 +58,6 @@ class CreateInformativeImageDto : public oatpp::DTO
     DTO_FIELD(String, fileId, "fileId");
     DTO_FIELD(String, imageId, "imageId");
     DTO_FIELD(String, name, "name");
-};
-
-class ResultDto : public oatpp::DTO
-{
-
-    DTO_INIT(ResultDto, DTO)
-
-    DTO_FIELD(Boolean, success);
-    DTO_FIELD(String, detail);
-
-    static Object<ResultDto> createShared(bool success, const char *detail)
-    {
-        auto dto = ResultDto::createShared();
-        dto->success = success;
-        dto->detail = detail;
-        return dto;
-    }
 };
 
 class CreateSkpResultDto : public oatpp::DTO
@@ -124,6 +82,30 @@ class FileVersionDto : public oatpp::DTO
 {
     DTO_INIT(FileVersionDto, DTO)
     DTO_FIELD(String, version);
+};
+
+class AttributeItemDto : public oatpp::DTO
+{
+    DTO_INIT(AttributeItemDto, DTO)
+    DTO_FIELD(String, dictName);
+    DTO_FIELD(String, key);
+    DTO_FIELD(String, value);
+};
+
+class UpdateAttributeDto : public oatpp::DTO
+{
+    DTO_INIT(UpdateAttributeDto, DTO)
+    DTO_FIELD(String, fileId);
+    DTO_FIELD(String, guid);
+    DTO_FIELD(List<Object<AttributeItemDto>>, attributes);
+};
+
+class CreateWrapDto : public oatpp::DTO
+{
+    DTO_INIT(CreateWrapDto, DTO)
+    DTO_FIELD(String, fileId);
+    DTO_FIELD(String, name);
+    DTO_FIELD(List<Object<AttributeItemDto>>, attributes);
 };
 
 #include OATPP_CODEGEN_END(DTO)
