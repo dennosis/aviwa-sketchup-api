@@ -18,14 +18,23 @@
 #undef min
 #undef max
 
+enum class SpacePlane
+{
+    XY, // Chão (Plano Horizontal)
+    XZ, // Frente (Plano Vertical)
+    YZ  // Lado (Plano Vertical)
+};
+
 class AviwaUtils
 {
 public:
     static SUModelRef createPaintingModel(const std::string &imagePath,
                                           double widthCm,
                                           double heightCm,
-                                          double thicknessCm)
+                                          double thicknessCm,
+                                          SpacePlane plane = SpacePlane::XZ)
     {
+        // Conversão para polegadas (unidade interna do SketchUp)
         double w = widthCm / 2.54;
         double h = heightCm / 2.54;
         double t = thicknessCm / 2.54;
@@ -35,6 +44,7 @@ public:
         if (res != SU_ERROR_NONE)
             throw std::runtime_error("SUModelCreate falhou: " + std::to_string(res));
 
+        // 1. Criar Definição do Componente
         SUComponentDefinitionRef paintingDef = SU_INVALID;
         res = SUComponentDefinitionCreate(&paintingDef);
         if (res != SU_ERROR_NONE)
@@ -43,10 +53,12 @@ public:
             throw std::runtime_error("SUComponentDefinitionCreate falhou: " + std::to_string(res));
         }
         SUComponentDefinitionSetName(paintingDef, "PAINTING");
+        SUModelAddComponentDefinitions(model, 1, &paintingDef);
 
         SUEntitiesRef paintingEntities = SU_INVALID;
         SUComponentDefinitionGetEntities(paintingDef, &paintingEntities);
 
+        // 2. Configurar Materiais
         SUMaterialRef matTexture = SU_INVALID;
         SUMaterialCreate(&matTexture);
         SUMaterialSetName(matTexture, "Capa_Quadro");
@@ -65,18 +77,16 @@ public:
         SUMaterialSetColor(matBlack, &black);
         SUMaterialSetColorizeType(matBlack, SUMaterialColorizeType_Shift);
 
+        // 3. Criar Geometria (Sempre no plano XY, com profundidade em -Z)
         SUGeometryInputRef geomInput = SU_INVALID;
         SUGeometryInputCreate(&geomInput);
 
         SUPoint3D verts[8] = {
-            {0, 0, 0},
-            {w, 0, 0},
-            {w, h, 0},
-            {0, h, 0},
+            {0, 0, 0}, {w, 0, 0}, {w, h, 0}, {0, h, 0}, // Frente
             {0, 0, -t},
             {w, 0, -t},
             {w, h, -t},
-            {0, h, -t},
+            {0, h, -t} // Verso
         };
         for (int i = 0; i < 8; ++i)
             SUGeometryInputAddVertex(geomInput, &verts[i]);
@@ -99,6 +109,7 @@ public:
         size_t fTop = addFace({2, 6, 7, 3});
         size_t fLeft = addFace({3, 7, 4, 0});
 
+        // 4. Aplicar Textura na Face Frontal
         SUMaterialInput matInputTexture = {};
         matInputTexture.num_uv_coords = 4;
         matInputTexture.material = matTexture;
@@ -110,8 +121,8 @@ public:
         }
         SUGeometryInputFaceSetFrontMaterial(geomInput, fFront, &matInputTexture);
 
+        // Aplicar Preto nas outras faces
         SUMaterialInput matInputBlack = {};
-        matInputBlack.num_uv_coords = 0;
         matInputBlack.material = matBlack;
         for (size_t fi : {fBack, fBottom, fRight, fTop, fLeft})
             SUGeometryInputFaceSetFrontMaterial(geomInput, fi, &matInputBlack);
@@ -119,11 +130,19 @@ public:
         SUEntitiesFill(paintingEntities, geomInput, true);
         SUGeometryInputRelease(&geomInput);
 
-        SUModelAddComponentDefinitions(model, 1, &paintingDef);
+        // 5. Instanciar e Rotacionar conforme o Plano
         SUEntitiesRef modelEntities = SU_INVALID;
         SUModelGetEntities(model, &modelEntities);
+
         SUComponentInstanceRef paintingInst = SU_INVALID;
         SUComponentDefinitionCreateInstance(paintingDef, &paintingInst);
+
+        // Criamos uma identidade e aplicamos a rotação baseada no SpacePlane
+        // Reaproveitando a lógica de ApplyPlaneRotation que discutimos
+        SUTransformation transform = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+        transform = ApplyPlaneRotation(transform, plane);
+
+        SUComponentInstanceSetTransform(paintingInst, &transform);
         SUEntitiesAddInstance(modelEntities, paintingInst, nullptr);
 
         return model;
@@ -157,29 +176,18 @@ public:
         return r;
     }
 
-    // TODO: rever ele esta considerando a altura no y e nao no z
-    static SUResult AddImageAsLeftComponent(
-        SUModelRef model,
-        const std::string &imagePath,
-        const std::string &definitionName)
+    static SUResult GetModelBounds(SUEntitiesRef rootEntities, double &outMinX, double &outMaxHeight)
     {
-        if (SUIsInvalid(model))
-            return SU_ERROR_INVALID_INPUT;
-
-        // 1. Calcular minX dos componentes existentes
-        SUEntitiesRef rootEntities = SU_INVALID;
-        SUModelGetEntities(model, &rootEntities);
-
         size_t count = 0;
         SUEntitiesGetNumInstances(rootEntities, &count);
         if (count == 0)
-            return SU_ERROR_NONE;
+            return SU_ERROR_GENERIC;
 
         std::vector<SUComponentInstanceRef> instances(count);
         SUEntitiesGetInstances(rootEntities, count, instances.data(), &count);
 
-        double minX = DBL_MAX;
-        double maxHeight = 0.0;
+        outMinX = DBL_MAX;
+        outMaxHeight = 0.0;
 
         for (auto &inst : instances)
         {
@@ -190,12 +198,12 @@ public:
             SUComponentDefinitionGetEntities(instDef, &defEntities);
 
             SUBoundingBox3D defBBox;
-            InitBBox(defBBox);
             SUEntitiesGetBoundingBox(defEntities, &defBBox);
 
             SUTransformation tr;
             SUComponentInstanceGetTransform(inst, &tr);
 
+            // (Mantendo sua lógica original de 8 pontos para garantir precisão com rotações)
             SUPoint3D corners[8] = {
                 {defBBox.min_point.x, defBBox.min_point.y, defBBox.min_point.z},
                 {defBBox.max_point.x, defBBox.min_point.y, defBBox.min_point.z},
@@ -206,92 +214,261 @@ public:
                 {defBBox.min_point.x, defBBox.max_point.y, defBBox.max_point.z},
                 {defBBox.max_point.x, defBBox.max_point.y, defBBox.max_point.z}};
 
-            SUBoundingBox3D worldBBox;
-            InitBBox(worldBBox);
             for (auto &c : corners)
             {
                 auto p = TransformPoint(c, tr);
-                ExpandBBox(worldBBox, p);
+                outMinX = std::min(outMinX, p.x);
+                // Mantendo Y como altura conforme seu código original por enquanto
+                outMaxHeight = std::max(outMaxHeight, p.y);
             }
-
-            minX = std::min(minX, worldBBox.min_point.x);
-
-            // TODO: rever o maxHeight
-            maxHeight = std::max(maxHeight, worldBBox.max_point.y - worldBBox.min_point.y);
         }
+        return (outMinX == DBL_MAX) ? SU_ERROR_GENERIC : SU_ERROR_NONE;
+    }
 
-        if (minX == DBL_MAX)
+    static SUTransformation CalculateImageTransform(
+        double imgW,
+        double imgH,
+        double targetHeight,
+        double &outTargetWidth)
+    {
+        // Calcula proporção e largura final
+        double aspectRatio = (imgH > 0.0) ? imgW / imgH : 1.0;
+        outTargetWidth = targetHeight * aspectRatio;
+
+        // Calcula os fatores de escala
+        double scaleX = (imgW > 0.0) ? outTargetWidth / imgW : 1.0;
+        double scaleY = (imgH > 0.0) ? targetHeight / imgH : 1.0;
+
+        // Constrói a matriz (Identidade com escalas aplicadas)
+        // Mantendo Y como altura conforme seu código original
+        SUTransformation transform = {{scaleX, 0, 0, 0,
+                                       0, scaleY, 0, 0,
+                                       0, 0, 1, 0,
+                                       0, 0, 0, 1}};
+
+        return transform;
+    }
+
+    static SUResult PrepareImage(
+        const std::string &path,
+        double targetHeight,
+        SUImageRef &outImage,
+        double &outWidth)
+    {
+        SUResult res = SUImageCreateFromFile(&outImage, path.c_str());
+        if (res != SU_ERROR_NONE)
+            return res;
+
+        double imgW, imgH;
+        SUImageGetDimensions(outImage, &imgW, &imgH);
+
+        // Usa a função de cálculo que isolamos anteriormente
+        SUTransformation imgTr = CalculateImageTransform(imgW, imgH, targetHeight, outWidth);
+
+        return SUImageSetTransform(outImage, &imgTr);
+    }
+
+    static SUResult CreateComponentFromImage(
+        SUModelRef model,
+        SUImageRef image,
+        const std::string &name,
+        SUComponentDefinitionRef &outDef)
+    {
+        SUComponentDefinitionCreate(&outDef);
+        SUComponentDefinitionSetName(outDef, name.c_str());
+
+        // Registra a definição no modelo
+        SUResult res = SUModelAddComponentDefinitions(model, 1, &outDef);
+        if (res != SU_ERROR_NONE)
+            return res;
+
+        SUEntitiesRef defEntities;
+        SUComponentDefinitionGetEntities(outDef, &defEntities);
+
+        // Adiciona a imagem já configurada às entidades da definição
+        return SUEntitiesAddImage(defEntities, image);
+    }
+
+    static SUResult GetEntitiesBoundingBox(SUEntitiesRef entities, SUBoundingBox3D &outBBox)
+    {
+        size_t count = 0;
+        SUEntitiesGetNumInstances(entities, &count);
+
+        // Inicializa um BBox "vazio" (Extremos invertidos para expansão)
+        outBBox.min_point = {DBL_MAX, DBL_MAX, DBL_MAX};
+        outBBox.max_point = {-DBL_MAX, -DBL_MAX, -DBL_MAX};
+
+        if (count == 0)
             return SU_ERROR_GENERIC;
 
-        // 2. Criar definição e registrar no modelo
-        SUComponentDefinitionRef def = SU_INVALID;
-        SUResult res = SUComponentDefinitionCreate(&def);
-        if (res != SU_ERROR_NONE)
-            return res;
+        std::vector<SUComponentInstanceRef> instances(count);
+        SUEntitiesGetInstances(entities, count, instances.data(), &count);
 
-        SUComponentDefinitionSetName(def, definitionName.c_str());
-
-        res = SUModelAddComponentDefinitions(model, 1, &def);
-        if (res != SU_ERROR_NONE)
+        for (auto &inst : instances)
         {
-            SUComponentDefinitionRelease(&def);
-            return res;
+            SUComponentDefinitionRef instDef = SU_INVALID;
+            SUComponentInstanceGetDefinition(inst, &instDef);
+
+            SUEntitiesRef defEntities = SU_INVALID;
+            SUComponentDefinitionGetEntities(instDef, &defEntities);
+
+            SUBoundingBox3D defBBox;
+            SUEntitiesGetBoundingBox(defEntities, &defBBox);
+
+            SUTransformation tr;
+            SUComponentInstanceGetTransform(inst, &tr);
+
+            // Define os 8 cantos para garantir precisão com rotações
+            SUPoint3D corners[8] = {
+                {defBBox.min_point.x, defBBox.min_point.y, defBBox.min_point.z},
+                {defBBox.max_point.x, defBBox.min_point.y, defBBox.min_point.z},
+                {defBBox.min_point.x, defBBox.max_point.y, defBBox.min_point.z},
+                {defBBox.max_point.x, defBBox.max_point.y, defBBox.min_point.z},
+                {defBBox.min_point.x, defBBox.min_point.y, defBBox.max_point.z},
+                {defBBox.max_point.x, defBBox.min_point.y, defBBox.max_point.z},
+                {defBBox.min_point.x, defBBox.max_point.y, defBBox.max_point.z},
+                {defBBox.max_point.x, defBBox.max_point.y, defBBox.max_point.z}};
+
+            for (const auto &c : corners)
+            {
+                SUPoint3D worldP = TransformPoint(c, tr); // Sua função auxiliar de transformação
+
+                // Expande o BBox de saída
+                outBBox.min_point.x = std::min(outBBox.min_point.x, worldP.x);
+                outBBox.min_point.y = std::min(outBBox.min_point.y, worldP.y);
+                outBBox.min_point.z = std::min(outBBox.min_point.z, worldP.z);
+
+                outBBox.max_point.x = std::max(outBBox.max_point.x, worldP.x);
+                outBBox.max_point.y = std::max(outBBox.max_point.y, worldP.y);
+                outBBox.max_point.z = std::max(outBBox.max_point.z, worldP.z);
+            }
         }
-
-        // 3. Criar imagem e pegar dimensões reais
-        SUImageRef image = SU_INVALID;
-        res = SUImageCreateFromFile(&image, imagePath.c_str());
-        if (res != SU_ERROR_NONE)
-            return res;
-
-        double imgWidth = 0.0, imgHeight = 0.0;
-        SUImageGetDimensions(image, &imgWidth, &imgHeight); // retorna em polegadas (unidade do modelo)
-
-        double aspectRatio = (imgHeight > 0.0) ? imgWidth / imgHeight : 1.0;
-        double targetHeight = maxHeight * 0.5;
-        double targetWidth = targetHeight * aspectRatio;
-
-        // escalar a imagem para o tamanho alvo via transform interno
-        double scaleX = (imgWidth > 0.0) ? targetWidth / imgWidth : 1.0;
-        double scaleY = (imgHeight > 0.0) ? targetHeight / imgHeight : 1.0;
-
-        SUTransformation imgTr = {{scaleX, 0, 0, 0,
-                                   0, scaleY, 0, 0,
-                                   0, 0, 1, 0,
-                                   0, 0, 0, 1}};
-        SUImageSetTransform(image, &imgTr);
-
-        SUEntitiesRef defEntities = SU_INVALID;
-        SUComponentDefinitionGetEntities(def, &defEntities);
-
-        res = SUEntitiesAddImage(defEntities, image);
-        if (res != SU_ERROR_NONE)
-            return res;
-
-        // 4. Instanciar com translação apenas (tamanho já definido no transform da imagem)
-        SUComponentInstanceRef inst = SU_INVALID;
-        res = SUComponentDefinitionCreateInstance(def, &inst);
-        if (res != SU_ERROR_NONE)
-            return res;
-
-        // Cria deslocamento para posicionar a imagem à esquerda dos componentes existentes, com uma pequena margem
-        double offsetX = minX - targetWidth - (0.1 * targetWidth);
-
-        SUTransformation tr = {{1, 0, 0, 0,
-                                0, 1, 0, 0,
-                                0, 0, 1, 0,
-                                offsetX, 0, 0, 1}};
-
-        SUComponentInstanceSetTransform(inst, &tr);
-
-        // 5. Adicionar instância ao modelo
-        res = SUEntitiesAddInstance(rootEntities, inst, NULL);
-        if (res != SU_ERROR_NONE)
-        {
-            SUComponentInstanceRelease(&inst);
-            return res;
-        }
-
         return SU_ERROR_NONE;
-    };
+    }
+
+    static SUTransformation ApplyPlaneRotation(const SUTransformation &baseTr, SpacePlane plane)
+    {
+        if (plane == SpacePlane::XY)
+            return baseTr;
+
+        // Inicializa como Identidade manualmente
+        // Uma matriz identidade tem 1.0 na diagonal principal e 0.0 no resto
+        SUTransformation rotation = {{1.0, 0.0, 0.0, 0.0,
+                                      0.0, 1.0, 0.0, 0.0,
+                                      0.0, 0.0, 1.0, 0.0,
+                                      0.0, 0.0, 0.0, 1.0}};
+
+        if (plane == SpacePlane::XZ)
+        {
+            // Rotaciona 90 graus no eixo X
+            // m5 = cos(90)=0, m6 = sin(90)=1, m9 = -sin(90)=-1, m10 = cos(90)=0
+            rotation.values[5] = 0.0;
+            rotation.values[6] = 1.0;
+            rotation.values[9] = -1.0;
+            rotation.values[10] = 0.0;
+        }
+        else if (plane == SpacePlane::YZ)
+        {
+            // Rotaciona para o plano lateral
+            rotation.values[0] = 0.0;
+            rotation.values[1] = 1.0;
+            rotation.values[5] = 0.0;
+            rotation.values[6] = 1.0;
+            rotation.values[8] = 1.0;
+            rotation.values[10] = 0.0;
+        }
+
+        SUTransformation result;
+        // Ordem: Rotação * Escala
+        SUTransformationMultiply(&rotation, &baseTr, &result);
+
+        return result;
+    }
+
+    static SUResult PrepareImage(
+        const std::string &path,
+        const SUBoundingBox3D &sceneBBox,
+        double scale,
+        SpacePlane plane,
+        SUImageRef &outImage,
+        double &outWidth)
+    {
+        SUResult res = SUImageCreateFromFile(&outImage, path.c_str());
+        if (res != SU_ERROR_NONE)
+            return res;
+
+        double imgW, imgH;
+        SUImageGetDimensions(outImage, &imgW, &imgH);
+
+        // 1. Sempre calculamos a escala como se fosse no plano XY primeiro
+        // (A "altura" do cenário depende do plano escolhido)
+        double sceneHeight = (plane == SpacePlane::XY) ? (sceneBBox.max_point.y - sceneBBox.min_point.y) : (sceneBBox.max_point.z - sceneBBox.min_point.z);
+
+        double targetHeight = sceneHeight * scale;
+        double aspectRatio = (imgH > 0.0) ? imgW / imgH : 1.0;
+        outWidth = targetHeight * aspectRatio;
+
+        double sX = (imgW > 0.0) ? outWidth / imgW : 1.0;
+        double sY = (imgH > 0.0) ? targetHeight / imgH : 1.0;
+
+        // 2. Cria a matriz de escala base (Plano XY)
+        SUTransformation baseTr = {{sX, 0, 0, 0,
+                                    0, sY, 0, 0,
+                                    0, 0, 1, 0,
+                                    0, 0, 0, 1}};
+
+        // 3. Aplica a rotação de plano de forma genérica
+        SUTransformation finalTr = ApplyPlaneRotation(baseTr, plane);
+
+        return SUImageSetTransform(outImage, &finalTr);
+    }
+
+    static SUResult AddImageAsLeftComponent(
+        SUModelRef model,
+        const std::string &imagePath,
+        const std::string &name,
+        double scale = 1.0,
+        SpacePlane plane = SpacePlane::XZ)
+    {
+        if (SUIsInvalid(model))
+            return SU_ERROR_INVALID_INPUT;
+
+        SUEntitiesRef rootEntities;
+        SUModelGetEntities(model, &rootEntities);
+
+        // 1. Obter limites do cenário
+        SUBoundingBox3D sceneBBox;
+        if (GetEntitiesBoundingBox(rootEntities, sceneBBox) != SU_ERROR_NONE)
+        {
+            return SU_ERROR_NONE;
+        }
+
+        // 2. Preparar imagem (Cálculos de dimensão e escala agora internos)
+        SUImageRef image = SU_INVALID;
+        double imageWidth = 0.0;
+        SUResult res = PrepareImage(imagePath, sceneBBox, scale, plane, image, imageWidth);
+        if (res != SU_ERROR_NONE)
+            return res;
+
+        // 3. Criar definição
+        SUComponentDefinitionRef imageDef = SU_INVALID;
+        res = CreateComponentFromImage(model, image, name, imageDef);
+        if (res != SU_ERROR_NONE)
+            return res;
+
+        // 4. Instanciar e posicionar (minX e translação final)
+        SUComponentInstanceRef inst = SU_INVALID;
+        SUComponentDefinitionCreateInstance(imageDef, &inst);
+
+        double posX = sceneBBox.min_point.x - imageWidth - (imageWidth * 0.1);
+
+        SUTransformation placementTr = {{1, 0, 0, 0,
+                                         0, 1, 0, 0,
+                                         0, 0, 1, 0,
+                                         posX, 0, 0, 1}};
+
+        SUComponentInstanceSetTransform(inst, &placementTr);
+
+        return SUEntitiesAddInstance(rootEntities, inst, NULL);
+    }
 };

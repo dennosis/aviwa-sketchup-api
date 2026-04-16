@@ -8,6 +8,8 @@
 #include "service/SketchUpService.hpp"
 #include "service/FileService.hpp"
 #include "service/AviwaService.hpp"
+#include "service/TempFileService.hpp"
+
 #include "model/TempFileModel.hpp"
 #include "common/ErrorHandler.hpp"
 
@@ -58,11 +60,14 @@ public:
   OATPP_CREATE_COMPONENT(std::shared_ptr<TempPath>, tempPath)([]
                                                               { return std::make_shared<TempPath>(Config::getTempPath()); }());
 
-  OATPP_CREATE_COMPONENT(std::shared_ptr<SketchUpService>, sketchUpService)([]
-                                                                            { return std::make_shared<SketchUpService>(); }());
+  OATPP_CREATE_COMPONENT(std::shared_ptr<TempFileService>, tempFileService)([]
+                                                                            { return std::make_shared<TempFileService>(); }());
 
   OATPP_CREATE_COMPONENT(std::shared_ptr<FileService>, fileService)([]
                                                                     { return std::make_shared<FileService>(); }());
+
+  OATPP_CREATE_COMPONENT(std::shared_ptr<SketchUpService>, sketchUpService)([]
+                                                                            { return std::make_shared<SketchUpService>(); }());
 
   OATPP_CREATE_COMPONENT(std::shared_ptr<AviwaService>, aviwaService)([]
                                                                       { return std::make_shared<AviwaService>(); }());

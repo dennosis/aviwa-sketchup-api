@@ -58,6 +58,7 @@ class CreateInformativeImageDto : public oatpp::DTO
     DTO_FIELD(String, fileId, "fileId");
     DTO_FIELD(String, imageId, "imageId");
     DTO_FIELD(String, name, "name");
+    DTO_FIELD(Float32, scale, "scale") = 1.0;
 };
 
 class CreateSkpResultDto : public oatpp::DTO

@@ -1,68 +1,48 @@
 #pragma once
 
+#include "service/TempFileService.hpp"
+#include "service/SketchUpService.hpp"
 #include "utils/AviwaUtils.hpp"
-#include "model/TempFileModel.hpp"
 #include <string>
 
 class AviwaService
 {
 private:
-    OATPP_COMPONENT(std::shared_ptr<TempPath>, m_tempPath);
-
-    std::string generateTempPath(const std::string &prefix) const
-    {
-        return (std::filesystem::path(m_tempPath->value) /
-                (prefix + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
-                 ".skp"))
-            .string();
-    }
+    OATPP_COMPONENT(std::shared_ptr<TempFileService>, m_tempFileService);
+    OATPP_COMPONENT(std::shared_ptr<SketchUpService>, m_sketchUpService);
 
 public:
-    AviwaService() { SUInitialize(); }
-    ~AviwaService() { SUTerminate(); }
-
+    // TODO: Arrumar a posição do uqadro
     std::string createPaintingFile(const std::string &imagePath,
                                    double width,
                                    double height,
                                    double thickness)
     {
-        auto skpPath = generateTempPath("painting_");
 
+        auto filePath = m_tempFileService->generatePath("painting", "skp").string();
+
+        return m_sketchUpService->saveModel(filePath, [&]()
+                                            {
         SUModelRef model = AviwaUtils::createPaintingModel(imagePath, width, height, thickness);
-
-        SUResult res = SUModelSaveToFile(model, skpPath.c_str());
-        SUModelRelease(&model);
-
-        if (res != SU_ERROR_NONE)
-            throw std::runtime_error("Erro na SketchUp API: " + std::to_string(res));
-
-        return skpPath;
+                                     
+                                                 return model; });
     }
 
+    // Incluir parametro de escala
     std::string AddImageAsLeftComponent(const std::string &filePath,
                                         const std::string &imagePath,
-                                        const std::string &name)
+                                        const std::string &name,
+                                        double scale = 1.0)
     {
-        auto skpPath = generateTempPath("file_");
 
-        SUModelRef model = SU_INVALID;
-        SUResult res = SketchUpUtils::loadModel(filePath, model);
-        if (res != SU_ERROR_NONE)
-            throw std::runtime_error("Erro ao carregar modelo: " + std::to_string(res));
-
-        res = AviwaUtils::AddImageAsLeftComponent(model, imagePath, name);
-        if (res != SU_ERROR_NONE)
-        {
-            SUModelRelease(&model);
-            throw std::runtime_error("Erro ao adicionar imagem: " + std::to_string(res));
-        }
-
-        res = SUModelSaveToFile(model, skpPath.c_str());
-        SUModelRelease(&model);
-
-        if (res != SU_ERROR_NONE)
-            throw std::runtime_error("Erro na SketchUp API: " + std::to_string(res));
-
-        return skpPath;
+        return m_sketchUpService->editAndSaveModel(filePath, [&](SUModelRef model)
+                                                   {
+                                                 SUResult res = AviwaUtils::AddImageAsLeftComponent(model, imagePath, name, scale);
+                                                 if (res != SU_ERROR_NONE)
+                                                 {
+                                                     SUModelRelease(&model);
+                                                     throw std::runtime_error("Erro ao adicionar imagem: " + std::to_string(res));
+                                                 }
+                                                 return filePath; });
     }
 };

@@ -9,7 +9,6 @@
 #include <SketchUpAPI/model/component_instance.h>
 #include "model/SketchUpComponentModel.hpp"
 #include "model/SketchUpComponentAttribute.hpp"
-#include "model/TempFileModel.hpp"
 #include "utils/SketchUpUtils.hpp"
 #include "utils/AviwaUtils.hpp"
 #include "oatpp/core/base/Environment.hpp"
@@ -26,42 +25,6 @@ class SketchUpService
 {
 
 private:
-    OATPP_COMPONENT(std::shared_ptr<TempPath>, m_tempPath);
-
-    struct SuScope
-    {
-        SuScope() { SUInitialize(); }
-        ~SuScope() { SUTerminate(); }
-    };
-
-    template <typename Fn>
-    std::string withModelGuard(const std::string &filepath, Fn &&fn)
-    {
-        SuScope su;
-
-        SUModelRef model = SU_INVALID;
-        if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
-            OATPP_ASSERT_HTTP(false, Status::CODE_500, "Erro ao carregar modelo");
-
-        try
-        {
-            fn(model);
-
-            SUResult res = SUModelSaveToFile(model, filepath.c_str());
-            SUModelRelease(&model);
-
-            OATPP_ASSERT_HTTP(res == SU_ERROR_NONE, Status::CODE_500,
-                              "Erro ao salvar modelo");
-
-            return filepath;
-        }
-        catch (const std::exception &e)
-        {
-            SUModelRelease(&model);
-            OATPP_ASSERT_HTTP(false, Status::CODE_500, e.what());
-        }
-    }
-
     template <typename TEntity>
     void applyAttributeUpdates(
         SUModelRef model,
@@ -162,9 +125,11 @@ private:
     }
 
 public:
+    SketchUpService() { SUInitialize(); }
+    ~SketchUpService() { SUTerminate(); }
+
     std::string getSkpVersion(const std::string &filepath)
     {
-        SuScope su;
 
         SUModelRef model = SU_INVALID;
         if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
@@ -182,7 +147,6 @@ public:
     std::vector<ComponentData> getDefinitionsAttributes(const std::string &filepath)
     {
         std::vector<ComponentData> result;
-        SuScope su;
 
         SUModelRef model = SU_INVALID;
         if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
@@ -251,7 +215,6 @@ public:
     std::vector<ComponentData> getInstancesAttributes(const std::string &filepath)
     {
         std::vector<ComponentData> result;
-        SuScope su;
 
         SUModelRef model = SU_INVALID;
         if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
@@ -311,7 +274,6 @@ public:
     std::vector<ItemNode> getModelTree(const std::string &filepath)
     {
         std::vector<ItemNode> rootList;
-        SuScope su;
 
         SUModelRef model = SU_INVALID;
         if (SketchUpUtils::loadModel(filepath, model) == SU_ERROR_NONE)
@@ -329,39 +291,39 @@ public:
                                         const std::string &guid,
                                         const std::vector<SketchUpComponentAttribute> &attributes)
     {
-        return withModelGuard(filepath, [&](SUModelRef model)
-                              { applyAttributeUpdates<SUComponentInstanceRef>(
-                                    model, attributes,
-                                    [&](SUModelRef m)
-                                    {
-                                        SUEntitiesRef root = SU_INVALID;
-                                        SUModelGetEntities(m, &root);
-                                        SUEntityRef e = SketchUpUtils::findEntityByGuid(root, guid);
-                                        return SUComponentInstanceFromEntity(e);
-                                    },
-                                    [](SUComponentInstanceRef inst, const std::string &d,
-                                       const std::string &k, SUTypedValueRef v)
-                                    {
-                                        return SketchUpUtils::setAttributeWithValidation(inst, d, k, v);
-                                    }); });
+        return editAndSaveModel(filepath, [&](SUModelRef model)
+                                { applyAttributeUpdates<SUComponentInstanceRef>(
+                                      model, attributes,
+                                      [&](SUModelRef m)
+                                      {
+                                          SUEntitiesRef root = SU_INVALID;
+                                          SUModelGetEntities(m, &root);
+                                          SUEntityRef e = SketchUpUtils::findEntityByGuid(root, guid);
+                                          return SUComponentInstanceFromEntity(e);
+                                      },
+                                      [](SUComponentInstanceRef inst, const std::string &d,
+                                         const std::string &k, SUTypedValueRef v)
+                                      {
+                                          return SketchUpUtils::setAttributeWithValidation(inst, d, k, v);
+                                      }); });
     }
 
     std::string updateDefinitionAttribute(const std::string &filepath,
                                           const std::string &guid,
                                           const std::vector<SketchUpComponentAttribute> &attributes)
     {
-        return withModelGuard(filepath, [&](SUModelRef model)
-                              { applyAttributeUpdates<SUComponentDefinitionRef>(
-                                    model, attributes,
-                                    [&](SUModelRef m)
-                                    {
-                                        return SketchUpUtils::findDefinitionByGuid(m, guid);
-                                    },
-                                    [](SUComponentDefinitionRef def, const std::string &d,
-                                       const std::string &k, SUTypedValueRef v)
-                                    {
-                                        return SketchUpUtils::setDefinitionAttribute(def, d, k, v);
-                                    }); });
+        return editAndSaveModel(filepath, [&](SUModelRef model)
+                                { applyAttributeUpdates<SUComponentDefinitionRef>(
+                                      model, attributes,
+                                      [&](SUModelRef m)
+                                      {
+                                          return SketchUpUtils::findDefinitionByGuid(m, guid);
+                                      },
+                                      [](SUComponentDefinitionRef def, const std::string &d,
+                                         const std::string &k, SUTypedValueRef v)
+                                      {
+                                          return SketchUpUtils::setDefinitionAttribute(def, d, k, v);
+                                      }); });
     }
 
     std::string createWrapComponent(
@@ -369,11 +331,71 @@ public:
         const std::string &name,
         const std::vector<SketchUpComponentAttribute> &attributes = {})
     {
-        return withModelGuard(filepath, [&](SUModelRef model)
-                              {
+        return editAndSaveModel(filepath, [&](SUModelRef model)
+                                {
             SUResult res = SketchUpUtils::wrapRootInstances(model, name, attributes);
             if (res != SU_ERROR_NONE)
                 throw std::runtime_error(
-                    "Erro ao criar estrutura Gabster: " + std::to_string(res)); });
+                    "Erro ao criar wrap component: " + std::to_string(res)); });
+    }
+
+    template <typename Fn>
+    static std::string editAndSaveModel(const std::string &filepath, Fn &&fn)
+    {
+
+        SUModelRef model = SU_INVALID;
+        if (SketchUpUtils::loadModel(filepath, model) != SU_ERROR_NONE)
+            OATPP_ASSERT_HTTP(false, Status::CODE_500, "Erro ao carregar modelo");
+
+        try
+        {
+            fn(model);
+
+            SUResult res = SUModelSaveToFile(model, filepath.c_str());
+            SUModelRelease(&model);
+
+            OATPP_ASSERT_HTTP(res == SU_ERROR_NONE, Status::CODE_500,
+                              "Erro ao salvar modelo");
+
+            return filepath;
+        }
+        catch (const std::exception &e)
+        {
+            SUModelRelease(&model);
+            OATPP_ASSERT_HTTP(false, Status::CODE_500, e.what());
+        }
+    }
+
+    template <typename Fn>
+    static std::string saveModel(const std::string &filepath, Fn &&fn)
+    {
+        SUModelRef model = SU_INVALID;
+
+        try
+        {
+            model = fn();
+
+            SUResult res = SUModelSaveToFile(model, filepath.c_str());
+
+            if (!SUIsInvalid(model))
+            {
+                SUModelRelease(&model);
+                model = SU_INVALID; // Importante para o catch não tentar liberar de novo
+            }
+
+            OATPP_ASSERT_HTTP(res == SU_ERROR_NONE, Status::CODE_500, "Erro ao salvar modelo SketchUp");
+
+            return filepath;
+        }
+        catch (const std::exception &e)
+        {
+            if (!SUIsInvalid(model))
+            {
+                SUModelRelease(&model);
+            }
+
+            OATPP_ASSERT_HTTP(false, Status::CODE_500, e.what());
+            throw;
+        }
     }
 };

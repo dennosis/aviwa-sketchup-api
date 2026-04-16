@@ -1,16 +1,14 @@
 #pragma once
 
-#include "utils/TempFileManager.hpp"
+#include "service/TempFileService.hpp"
 
 #include "oatpp/web/server/api/ApiController.hpp"
 #include "oatpp/web/mime/multipart/InMemoryDataProvider.hpp"
-#include "oatpp/web/mime/multipart/TemporaryFileProvider.hpp"
 #include "oatpp/web/mime/multipart/Reader.hpp"
 #include "oatpp/web/mime/multipart/PartList.hpp"
 #include "oatpp/core/macro/codegen.hpp"
 #include "oatpp/core/macro/component.hpp"
 #include "oatpp/parser/json/mapping/ObjectMapper.hpp"
-#include "model/TempFileModel.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -22,13 +20,13 @@ namespace mp = oatpp::web::mime::multipart;
 class TempFileController : public oatpp::web::server::api::ApiController
 {
 private:
-    OATPP_COMPONENT(std::shared_ptr<TempPath>, m_tempPath);
+    OATPP_COMPONENT(std::shared_ptr<TempFileService>, m_tempFileService);
 
 public:
     TempFileController(const std::shared_ptr<oatpp::data::mapping::ObjectMapper> &objectMapper)
         : oatpp::web::server::api::ApiController(objectMapper)
     {
-        TempFileManager::instance().init(m_tempPath->value);
+        m_tempFileService->init();
     }
 
     static std::shared_ptr<TempFileController> createShared()
@@ -42,32 +40,27 @@ public:
     {
         mp::PartList multipart(request->getHeaders());
         mp::Reader multipartReader(&multipart);
-
         multipartReader.setDefaultPartReader(
-            mp::createInMemoryPartReader(50 * 1024 * 1024)); // 50 MB
-
+            mp::createInMemoryPartReader(50 * 1024 * 1024));
         request->transferBody(&multipartReader);
 
         auto part = multipart.getNamedPart("file");
         OATPP_ASSERT_HTTP(part, Status::CODE_400, "Campo 'file' ausente no multipart");
         OATPP_ASSERT_HTTP(part->getFilename(), Status::CODE_400, "filename ausente no campo 'file'");
 
-        std::string originalName = part->getFilename()->c_str();
-
         std::string mimeType = "application/octet-stream";
-        auto ctHeader = part->getHeaders().get("Content-Type");
-        if (ctHeader)
-            mimeType = ctHeader->c_str();
+        if (auto ct = part->getHeaders().get("Content-Type"))
+            mimeType = ct->c_str();
 
-        fs::path destPath = fs::path(m_tempPath->value) / (std::to_string(std::chrono::steady_clock::now()
-                                                                              .time_since_epoch()
-                                                                              .count()) +
-                                                           "_" + originalName);
+        const fs::path originalName = part->getFilename()->c_str();
+        const std::string fileName = originalName.stem().string();
+        const std::string fileExtension = originalName.extension().string().substr(1);
+
+        const auto destPath = m_tempFileService->generatePath(fileName, fileExtension);
 
         {
             std::ofstream ofs(destPath, std::ios::binary);
-            OATPP_ASSERT_HTTP(ofs.is_open(), Status::CODE_500,
-                              "Falha ao gravar arquivo temporário");
+            OATPP_ASSERT_HTTP(ofs.is_open(), Status::CODE_500, "Falha ao gravar arquivo temporário");
 
             auto stream = part->getPayload()->openInputStream();
             v_char8 buf[4096];
@@ -76,18 +69,16 @@ public:
                 ofs.write(reinterpret_cast<const char *>(buf), n);
         }
 
-        auto fileSize = fs::file_size(destPath);
-        auto id = TempFileManager::instance().registerFile(
-            destPath, originalName, mimeType, fileSize);
-        auto ttlSec = std::chrono::duration_cast<std::chrono::seconds>(
-                          TempFileManager::DEFAULT_TTL)
-                          .count();
+        const auto fileSize = fs::file_size(destPath);
+        const auto id = m_tempFileService->registerFile(destPath, fileName, mimeType, fileSize);
 
-        auto json = oatpp::String(buildJson({{"id", id},
-                                             {"name", originalName},
-                                             {"mimeType", mimeType},
-                                             {"size", std::to_string(fileSize)},
-                                             {"expiresInSec", std::to_string(ttlSec)}}));
+        auto json = oatpp::String(buildJson({
+            {"id", id},
+            {"name", fileName},
+            {"mimeType", mimeType},
+            {"size", std::to_string(fileSize)},
+            {"expiresInSec", std::to_string(TempFileService::defaultTtlSeconds())},
+        }));
 
         auto response = createResponse(Status::CODE_200, json);
         response->putHeader("Content-Type", "application/json");
@@ -97,9 +88,10 @@ public:
     ENDPOINT("DELETE", "/temp/{id}", deleteFile,
              PATH(String, id))
     {
-        bool removed = TempFileManager::instance().remove(id->c_str());
-        OATPP_ASSERT_HTTP(removed, Status::CODE_404,
-                          "Arquivo temporário não encontrado");
+        OATPP_ASSERT_HTTP(
+            m_tempFileService->remove(id->c_str()),
+            Status::CODE_404,
+            "Arquivo temporário não encontrado");
 
         return createResponse(Status::CODE_204, "");
     }
@@ -116,12 +108,9 @@ private:
             if (!first)
                 ss << ',';
             first = false;
-            bool isNum = !v.empty() && std::all_of(v.begin(), v.end(), ::isdigit);
+            const bool isNum = !v.empty() && std::all_of(v.begin(), v.end(), ::isdigit);
             ss << '"' << k << "\":";
-            if (isNum)
-                ss << v;
-            else
-                ss << '"' << v << '"';
+            isNum ? ss << v : ss << '"' << v << '"';
         }
         ss << '}';
         return ss.str();

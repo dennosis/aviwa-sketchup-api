@@ -66,6 +66,14 @@ public:
         REQUIRE_FIELD(body->imageId, "imageId");
         REQUIRE_FIELD(body->name, "name");
 
+        if (body->scale && (*body->scale <= 0.0 || *body->scale > 1.0))
+        {
+            OATPP_ASSERT_HTTP(false, Status::CODE_400,
+                              "scale deve ser > 0 e <= 1");
+        }
+
+        double scale = body->scale ? *body->scale : 1.0;
+
         auto buffer = withTempFileGuard(body->fileId, [&](auto &entry)
                                         {
         auto path = withTempFileGuard(body->imageId, [&](auto &entry_image)
@@ -73,7 +81,9 @@ public:
             return m_aviwaService->AddImageAsLeftComponent(
                 entry.filepath.string(),
                 entry_image.filepath.string(),
-                body->name->c_str());
+                body->name->c_str(),
+                scale
+            );
         });
         return SkpResponseBuilder::readFileToBuffer(path); });
 
