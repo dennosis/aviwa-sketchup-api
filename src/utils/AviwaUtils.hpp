@@ -17,6 +17,7 @@
 #include <unordered_map>
 #undef min
 #undef max
+#include <array>
 
 enum class SpacePlane
 {
@@ -34,7 +35,6 @@ public:
                                           double thicknessCm,
                                           SpacePlane plane = SpacePlane::XZ)
     {
-        // Conversão para polegadas (unidade interna do SketchUp)
         double w = widthCm / 2.54;
         double h = heightCm / 2.54;
         double t = thicknessCm / 2.54;
@@ -77,10 +77,7 @@ public:
         SUMaterialSetColor(matBlack, &black);
         SUMaterialSetColorizeType(matBlack, SUMaterialColorizeType_Shift);
 
-        // 3. Criar Geometria (Sempre no plano XY, com profundidade em -Z)
-        SUGeometryInputRef geomInput = SU_INVALID;
-        SUGeometryInputCreate(&geomInput);
-
+        // 3. Calcular rotação e aplicar diretamente nos vértices base (plano XY)
         SUPoint3D verts[8] = {
             {0, 0, 0}, {w, 0, 0}, {w, h, 0}, {0, h, 0}, // Frente
             {0, 0, -t},
@@ -88,6 +85,29 @@ public:
             {w, h, -t},
             {0, h, -t} // Verso
         };
+
+        // Monta a matriz de rotação para o plano desejado
+        SUTransformation rot = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+        rot = ApplyPlaneRotation(rot, plane);
+
+        // SUTransformation é column-major:
+        //   [ v[0]  v[4]  v[8]  v[12] ]
+        //   [ v[1]  v[5]  v[9]  v[13] ]
+        //   [ v[2]  v[6]  v[10] v[14] ]
+        //   [ v[3]  v[7]  v[11] v[15] ]
+        for (int i = 0; i < 8; ++i)
+        {
+            const double x = verts[i].x, y = verts[i].y, z = verts[i].z;
+            verts[i] = {
+                rot.values[0] * x + rot.values[4] * y + rot.values[8] * z + rot.values[12],
+                rot.values[1] * x + rot.values[5] * y + rot.values[9] * z + rot.values[13],
+                rot.values[2] * x + rot.values[6] * y + rot.values[10] * z + rot.values[14]};
+        }
+
+        // 4. Criar Geometria com vértices já no plano correto
+        SUGeometryInputRef geomInput = SU_INVALID;
+        SUGeometryInputCreate(&geomInput);
+
         for (int i = 0; i < 8; ++i)
             SUGeometryInputAddVertex(geomInput, &verts[i]);
 
@@ -109,7 +129,7 @@ public:
         size_t fTop = addFace({2, 6, 7, 3});
         size_t fLeft = addFace({3, 7, 4, 0});
 
-        // 4. Aplicar Textura na Face Frontal
+        // 5. Aplicar Textura na Face Frontal
         SUMaterialInput matInputTexture = {};
         matInputTexture.num_uv_coords = 4;
         matInputTexture.material = matTexture;
@@ -130,22 +150,195 @@ public:
         SUEntitiesFill(paintingEntities, geomInput, true);
         SUGeometryInputRelease(&geomInput);
 
-        // 5. Instanciar e Rotacionar conforme o Plano
+        // 6. Instanciar com transform identidade — rotação já está na geometria
         SUEntitiesRef modelEntities = SU_INVALID;
         SUModelGetEntities(model, &modelEntities);
 
         SUComponentInstanceRef paintingInst = SU_INVALID;
         SUComponentDefinitionCreateInstance(paintingDef, &paintingInst);
 
-        // Criamos uma identidade e aplicamos a rotação baseada no SpacePlane
-        // Reaproveitando a lógica de ApplyPlaneRotation que discutimos
-        SUTransformation transform = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
-        transform = ApplyPlaneRotation(transform, plane);
-
-        SUComponentInstanceSetTransform(paintingInst, &transform);
+        SUTransformation identity = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+        SUComponentInstanceSetTransform(paintingInst, &identity);
         SUEntitiesAddInstance(modelEntities, paintingInst, nullptr);
 
         return model;
+    }
+
+    static void addSweptFrameToModel(SUModelRef model,
+                                     double widthCm,
+                                     double heightCm,
+                                     const std::vector<SUPoint2D> &profile2D,
+                                     SpacePlane plane = SpacePlane::XZ) // Novo parâmetro
+    {
+        const double w = widthCm / 2.54;
+        const double h = heightCm / 2.54;
+
+        using V3 = std::array<double, 3>;
+
+        // Lambda para rotacionar vetores/pontos usando a matriz do SpacePlane
+        auto applyPlane = [&](V3 v, const SUTransformation &rot) -> V3
+        {
+            return {
+                rot.values[0] * v[0] + rot.values[4] * v[1] + rot.values[8] * v[2] + rot.values[12],
+                rot.values[1] * v[0] + rot.values[5] * v[1] + rot.values[9] * v[2] + rot.values[13],
+                rot.values[2] * v[0] + rot.values[6] * v[1] + rot.values[10] * v[2] + rot.values[14]};
+        };
+
+        // Obter matriz de rotação
+        SUTransformation rot = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+        rot = ApplyPlaneRotation(rot, plane);
+
+        // Helpers matemáticos
+        auto v3add = [](V3 a, V3 b) -> V3
+        { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; };
+        auto v3sub = [](V3 a, V3 b) -> V3
+        { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+        auto v3scale = [](V3 a, double s) -> V3
+        { return {a[0] * s, a[1] * s, a[2] * s}; };
+        auto v3norm = [](V3 a) -> V3
+        {
+            double l = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+            return l > 1e-10 ? V3{a[0] / l, a[1] / l, a[2] / l} : V3{0, 0, 0};
+        };
+        auto v3dot = [](V3 a, V3 b) -> double
+        { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+
+        // --- Material ---
+        SUMaterialRef matFrame = SU_INVALID;
+        SUMaterialCreate(&matFrame);
+        SUMaterialSetName(matFrame, "Moldura_Sweep");
+        SUColor frameColor = {180, 140, 90, 255};
+        SUMaterialSetColor(matFrame, &frameColor);
+
+        // --- Path e Vetores base transformados para o plano ---
+        const int N = 4;
+        std::vector<V3> rawPath = {{0, 0, 0}, {w, 0, 0}, {w, h, 0}, {0, h, 0}};
+        std::vector<V3> pathPts(N);
+        for (int i = 0; i < N; ++i)
+            pathPts[i] = applyPlane(rawPath[i], rot);
+
+        // O vetor 'up' original (profundidade) e o centro para o cálculo do 'outward'
+        V3 up = applyPlane({0, 0, -1}, rot);
+        // Removemos a translação da rotação para vetores de direção pura (como o 'up')
+        // Se ApplyPlaneRotation apenas rotaciona, o applyPlane acima funciona.
+        // Caso contrário, use uma versão sem v[12,13,14] para vetores.
+
+        V3 center = applyPlane({w / 2, h / 2, 0}, rot);
+
+        // --- Frame local com miter em cada canto ---
+        struct CornerFrame
+        {
+            V3 origin, right, up;
+        };
+        std::vector<CornerFrame> frames(N);
+
+        for (int i = 0; i < N; ++i)
+        {
+            int prev = (i + N - 1) % N;
+            int next = (i + 1) % N;
+
+            V3 fIn = v3norm(v3sub(pathPts[i], pathPts[prev]));
+            V3 fOut = v3norm(v3sub(pathPts[next], pathPts[i]));
+
+            V3 bisector = v3norm(v3add(fIn, fOut));
+
+            // O vetor 'rightDir' precisa ser perpendicular ao bisector e ao plano normal
+            // Usamos o Cross Product entre o bisector e a normal do plano (que calculamos via rotação)
+            V3 planeNormal = applyPlane({0, 0, 1}, rot); // Normal do plano XY original
+
+            // Produto vetorial rudimentar (Cross Product) para achar a direção externa
+            auto v3cross = [](V3 a, V3 b) -> V3
+            {
+                return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+            };
+
+            V3 rightDir = v3norm(v3cross(bisector, planeNormal));
+
+            V3 outward = v3norm(v3sub(pathPts[i], center));
+            if (v3dot(rightDir, outward) < 0)
+                rightDir = v3scale(rightDir, -1.0);
+
+            double cosHalf = v3dot(bisector, fOut);
+            double miterScale = (cosHalf > 1e-6) ? (1.0 / cosHalf) : 1.0;
+
+            frames[i] = {pathPts[i], v3scale(rightDir, miterScale), up};
+        }
+
+        // --- Geração da Geometria (O resto permanece similar) ---
+        const int P = static_cast<int>(profile2D.size());
+        SUGeometryInputRef geom = SU_INVALID;
+        SUGeometryInputCreate(&geom);
+
+        auto sweepPt = [&](int corner, int j) -> V3
+        {
+            const auto &f = frames[corner];
+            double u = profile2D[j].x;
+            double v = profile2D[j].y;
+            return v3add(f.origin, v3add(v3scale(f.right, u), v3scale(f.up, v)));
+        };
+
+        for (int i = 0; i < N; ++i)
+        {
+            for (int j = 0; j < P; ++j)
+            {
+                V3 pt = sweepPt(i, j);
+                SUPoint3D v = {pt[0], pt[1], pt[2]};
+                SUGeometryInputAddVertex(geom, &v);
+            }
+        }
+
+        auto idx = [&](int corner, int j) -> size_t
+        { return (size_t)(((corner + N) % N) * P + j); };
+
+        auto addFace = [&](std::vector<size_t> indices)
+        {
+            SULoopInputRef loop = SU_INVALID;
+            SULoopInputCreate(&loop);
+            for (auto k : indices)
+                SULoopInputAddVertexIndex(loop, k);
+            size_t fi = 0;
+            SUGeometryInputAddFace(geom, &loop, &fi);
+            SUMaterialInput mi = {};
+            mi.material = matFrame;
+            SUGeometryInputFaceSetFrontMaterial(geom, fi, &mi);
+        };
+
+        // Faces laterais
+        for (int i = 0; i < N; ++i)
+        {
+            int next = (i + 1) % N;
+            for (int j = 0; j < P - 1; ++j)
+            {
+                addFace({idx(i, j), idx(next, j), idx(next, j + 1), idx(i, j + 1)});
+            }
+        }
+
+        // Faces internas
+        for (int i = 0; i < N; ++i)
+        {
+            int next = (i + 1) % N;
+            addFace({idx(i, 0), idx(i, P - 1), idx(next, P - 1), idx(next, 0)});
+        }
+
+        // --- Finalização do Componente ---
+        SUComponentDefinitionRef def = SU_INVALID;
+        SUComponentDefinitionCreate(&def);
+        SUComponentDefinitionSetName(def, "FRAME_SWEEP");
+        SUModelAddComponentDefinitions(model, 1, &def);
+
+        SUEntitiesRef defEntities = SU_INVALID;
+        SUComponentDefinitionGetEntities(def, &defEntities);
+        SUEntitiesFill(defEntities, geom, true);
+        SUGeometryInputRelease(&geom);
+
+        SUEntitiesRef modelEntities = SU_INVALID;
+        SUModelGetEntities(model, &modelEntities);
+        SUComponentInstanceRef inst = SU_INVALID;
+        SUComponentDefinitionCreateInstance(def, &inst);
+
+        SUTransformation identity = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+        SUComponentInstanceSetTransform(inst, &identity);
+        SUEntitiesAddInstance(modelEntities, inst, nullptr);
     }
 
     static void InitBBox(SUBoundingBox3D &bbox)

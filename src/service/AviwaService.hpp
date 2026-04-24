@@ -12,20 +12,24 @@ private:
     OATPP_COMPONENT(std::shared_ptr<SketchUpService>, m_sketchUpService);
 
 public:
-    // TODO: Arrumar a posição do uqadro
     std::string createPaintingFile(const std::string &imagePath,
                                    double width,
                                    double height,
-                                   double thickness)
+                                   double thickness,
+                                   std::optional<std::vector<SUPoint2D>> profile = std::nullopt)
     {
-
         auto filePath = m_tempFileService->generatePath("painting", "skp").string();
 
         return m_sketchUpService->saveModel(filePath, [&]()
                                             {
         SUModelRef model = AviwaUtils::createPaintingModel(imagePath, width, height, thickness);
-                                     
-                                                 return model; });
+        
+        if (profile.has_value()) 
+        {
+            AviwaUtils::addSweptFrameToModel(model, width, height, profile.value());
+        }
+
+        return model; });
     }
 
     // Incluir parametro de escala

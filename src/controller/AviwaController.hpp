@@ -49,11 +49,30 @@ public:
         OATPP_ASSERT_HTTP(body->width > 0 && body->height > 0,
                           Status::CODE_400, Messages::INVALID_PARAMS);
 
+        std::optional<std::vector<SUPoint2D>> profileOpt = std::nullopt;
+
+        if (body->profile && !body->profile->empty())
+        {
+            std::vector<SUPoint2D> pts;
+            const double INCH_TO_UNIT = 1.0 / 2.54;
+
+            for (const auto &pDto : *body->profile)
+            {
+                pts.push_back({pDto->x * INCH_TO_UNIT,
+                               pDto->y * INCH_TO_UNIT});
+            }
+            profileOpt = std::move(pts);
+        }
+
         auto buffer = withTempFileGuard(body->imageId, [&](auto &entry)
                                         {
         auto path = m_aviwaService->createPaintingFile(
             entry.filepath.string(),
-            body->width, body->height, body->thickness);
+            body->width, 
+            body->height, 
+            body->thickness,
+            profileOpt
+        );
         return SkpResponseBuilder::readFileToBuffer(path); });
 
         return SkpResponseBuilder::buildResponseFromBuffer(this, buffer, "file.skp");

@@ -70,13 +70,21 @@ class CreateSkpResultDto : public oatpp::DTO
     DTO_FIELD(String, savedPath);
 };
 
+class PointDto : public oatpp::DTO
+{
+    DTO_INIT(PointDto, DTO)
+    DTO_FIELD(Float64, x);
+    DTO_FIELD(Float64, y);
+};
+
 class CreateTexturedRectDto : public oatpp::DTO
 {
     DTO_INIT(CreateTexturedRectDto, DTO)
-    DTO_FIELD(String, imageId, "imageId");
+    DTO_FIELD(String, imageId);
     DTO_FIELD(Float64, width);
     DTO_FIELD(Float64, height);
     DTO_FIELD(Float64, thickness);
+    DTO_FIELD(Vector<Object<PointDto>>, profile);
 };
 
 class FileVersionDto : public oatpp::DTO
