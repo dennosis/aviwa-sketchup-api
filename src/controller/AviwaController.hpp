@@ -45,6 +45,32 @@ public:
         REQUIRE_FIELD(body->height, "height");
         REQUIRE_FIELD(body->width, "width");
         REQUIRE_FIELD(body->thickness, "thickness");
+        REQUIRE_FIELD(body->name, "name");
+
+        OATPP_ASSERT_HTTP(body->width > 0 && body->height > 0,
+                          Status::CODE_400, Messages::INVALID_PARAMS);
+
+        auto buffer = withTempFileGuard(body->imageId, [&](auto &entry)
+                                        {
+        auto path = m_aviwaService->createPaintingFile(
+            entry.filepath.string(),
+            body->width, 
+            body->height, 
+            body->thickness,
+            body->name
+        );
+        return SkpResponseBuilder::readFileToBuffer(path); });
+
+        return SkpResponseBuilder::buildResponseFromBuffer(this, buffer, "file.skp");
+    }
+
+    ENDPOINT("POST", "/create/swept-frame", createSweptFrame,
+             BODY_DTO(Object<CreateSweptFrameDto>, body))
+    {
+        REQUIRE_FIELD(body->fileId, "fileId");
+        REQUIRE_FIELD(body->height, "height");
+        REQUIRE_FIELD(body->width, "width");
+        REQUIRE_FIELD(body->name, "name");
 
         OATPP_ASSERT_HTTP(body->width > 0 && body->height > 0,
                           Status::CODE_400, Messages::INVALID_PARAMS);
@@ -64,15 +90,56 @@ public:
             profileOpt = std::move(pts);
         }
 
-        auto buffer = withTempFileGuard(body->imageId, [&](auto &entry)
+        auto buffer = withTempFileGuard(body->fileId, [&](auto &entry)
                                         {
-        auto path = m_aviwaService->createPaintingFile(
+        auto path = m_aviwaService->createSweptFrame(
             entry.filepath.string(),
             body->width, 
             body->height, 
-            body->thickness,
+            body->name->c_str(),
             profileOpt
         );
+        return SkpResponseBuilder::readFileToBuffer(path); });
+
+        return SkpResponseBuilder::buildResponseFromBuffer(this, buffer, "file.skp");
+    }
+
+    ENDPOINT("POST", "/update/material/color", applyColorMaterial,
+             BODY_DTO(Object<ApplyColorMaterialDto>, body))
+    {
+        REQUIRE_FIELD(body->fileId, "fileId");
+        REQUIRE_FIELD(body->guid, "guid");
+        REQUIRE_FIELD(body->color, "color");
+
+        auto buffer = withTempFileGuard(body->fileId, [&](auto &entry)
+                                        {
+        auto path =  m_aviwaService->applyColorMaterialToComponent(
+                entry.filepath.string(),
+                body->guid->c_str(),
+                body->color->c_str()
+            );
+        return SkpResponseBuilder::readFileToBuffer(path); });
+
+        return SkpResponseBuilder::buildResponseFromBuffer(this, buffer, "file.skp");
+    }
+
+    ENDPOINT("POST", "/update/material/texture", applyImageMaterial,
+             BODY_DTO(Object<ApplyImageMaterialDto>, body))
+    {
+        REQUIRE_FIELD(body->fileId, "fileId");
+        REQUIRE_FIELD(body->imageId, "imageId");
+        REQUIRE_FIELD(body->guid, "guid");
+
+        auto buffer = withTempFileGuard(body->fileId, [&](auto &entry)
+                                        {
+        auto path = withTempFileGuard(body->imageId, [&](auto &entry_image)
+        {
+            return m_aviwaService->applyImageMaterialToComponent(
+                entry.filepath.string(),
+                entry_image.filepath.string(),
+                body->guid->c_str()
+            );
+        });
         return SkpResponseBuilder::readFileToBuffer(path); });
 
         return SkpResponseBuilder::buildResponseFromBuffer(this, buffer, "file.skp");
@@ -87,8 +154,7 @@ public:
 
         if (body->scale && (*body->scale <= 0.0 || *body->scale > 1.0))
         {
-            OATPP_ASSERT_HTTP(false, Status::CODE_400,
-                              "scale deve ser > 0 e <= 1");
+            OATPP_ASSERT_HTTP(false, Status::CODE_400, "scale deve ser > 0 e <= 1");
         }
 
         double scale = body->scale ? *body->scale : 1.0;

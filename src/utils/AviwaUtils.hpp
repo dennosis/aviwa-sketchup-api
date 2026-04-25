@@ -33,6 +33,7 @@ public:
                                           double widthCm,
                                           double heightCm,
                                           double thicknessCm,
+                                          const std::string &name,
                                           SpacePlane plane = SpacePlane::XZ)
     {
         double w = widthCm / 2.54;
@@ -52,7 +53,7 @@ public:
             SUModelRelease(&model);
             throw std::runtime_error("SUComponentDefinitionCreate falhou: " + std::to_string(res));
         }
-        SUComponentDefinitionSetName(paintingDef, "PAINTING");
+        SUComponentDefinitionSetName(paintingDef, name.c_str());
         SUModelAddComponentDefinitions(model, 1, &paintingDef);
 
         SUEntitiesRef paintingEntities = SU_INVALID;
@@ -167,15 +168,15 @@ public:
     static void addSweptFrameToModel(SUModelRef model,
                                      double widthCm,
                                      double heightCm,
+                                     const std::string &name,
                                      const std::vector<SUPoint2D> &profile2D,
-                                     SpacePlane plane = SpacePlane::XZ) // Novo parâmetro
+                                     SpacePlane plane = SpacePlane::XZ)
     {
         const double w = widthCm / 2.54;
         const double h = heightCm / 2.54;
 
         using V3 = std::array<double, 3>;
 
-        // Lambda para rotacionar vetores/pontos usando a matriz do SpacePlane
         auto applyPlane = [&](V3 v, const SUTransformation &rot) -> V3
         {
             return {
@@ -184,11 +185,9 @@ public:
                 rot.values[2] * v[0] + rot.values[6] * v[1] + rot.values[10] * v[2] + rot.values[14]};
         };
 
-        // Obter matriz de rotação
         SUTransformation rot = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
         rot = ApplyPlaneRotation(rot, plane);
 
-        // Helpers matemáticos
         auto v3add = [](V3 a, V3 b) -> V3
         { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; };
         auto v3sub = [](V3 a, V3 b) -> V3
@@ -202,30 +201,20 @@ public:
         };
         auto v3dot = [](V3 a, V3 b) -> double
         { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+        auto v3cross = [](V3 a, V3 b) -> V3
+        {
+            return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+        };
 
-        // --- Material ---
-        SUMaterialRef matFrame = SU_INVALID;
-        SUMaterialCreate(&matFrame);
-        SUMaterialSetName(matFrame, "Moldura_Sweep");
-        SUColor frameColor = {180, 140, 90, 255};
-        SUMaterialSetColor(matFrame, &frameColor);
-
-        // --- Path e Vetores base transformados para o plano ---
         const int N = 4;
         std::vector<V3> rawPath = {{0, 0, 0}, {w, 0, 0}, {w, h, 0}, {0, h, 0}};
         std::vector<V3> pathPts(N);
         for (int i = 0; i < N; ++i)
             pathPts[i] = applyPlane(rawPath[i], rot);
 
-        // O vetor 'up' original (profundidade) e o centro para o cálculo do 'outward'
         V3 up = applyPlane({0, 0, -1}, rot);
-        // Removemos a translação da rotação para vetores de direção pura (como o 'up')
-        // Se ApplyPlaneRotation apenas rotaciona, o applyPlane acima funciona.
-        // Caso contrário, use uma versão sem v[12,13,14] para vetores.
-
         V3 center = applyPlane({w / 2, h / 2, 0}, rot);
 
-        // --- Frame local com miter em cada canto ---
         struct CornerFrame
         {
             V3 origin, right, up;
@@ -241,19 +230,9 @@ public:
             V3 fOut = v3norm(v3sub(pathPts[next], pathPts[i]));
 
             V3 bisector = v3norm(v3add(fIn, fOut));
-
-            // O vetor 'rightDir' precisa ser perpendicular ao bisector e ao plano normal
-            // Usamos o Cross Product entre o bisector e a normal do plano (que calculamos via rotação)
-            V3 planeNormal = applyPlane({0, 0, 1}, rot); // Normal do plano XY original
-
-            // Produto vetorial rudimentar (Cross Product) para achar a direção externa
-            auto v3cross = [](V3 a, V3 b) -> V3
-            {
-                return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-            };
+            V3 planeNormal = applyPlane({0, 0, 1}, rot);
 
             V3 rightDir = v3norm(v3cross(bisector, planeNormal));
-
             V3 outward = v3norm(v3sub(pathPts[i], center));
             if (v3dot(rightDir, outward) < 0)
                 rightDir = v3scale(rightDir, -1.0);
@@ -264,7 +243,6 @@ public:
             frames[i] = {pathPts[i], v3scale(rightDir, miterScale), up};
         }
 
-        // --- Geração da Geometria (O resto permanece similar) ---
         const int P = static_cast<int>(profile2D.size());
         SUGeometryInputRef geom = SU_INVALID;
         SUGeometryInputCreate(&geom);
@@ -272,20 +250,17 @@ public:
         auto sweepPt = [&](int corner, int j) -> V3
         {
             const auto &f = frames[corner];
-            double u = profile2D[j].x;
-            double v = profile2D[j].y;
-            return v3add(f.origin, v3add(v3scale(f.right, u), v3scale(f.up, v)));
+            return v3add(f.origin, v3add(v3scale(f.right, profile2D[j].x),
+                                         v3scale(f.up, profile2D[j].y)));
         };
 
         for (int i = 0; i < N; ++i)
-        {
             for (int j = 0; j < P; ++j)
             {
                 V3 pt = sweepPt(i, j);
                 SUPoint3D v = {pt[0], pt[1], pt[2]};
                 SUGeometryInputAddVertex(geom, &v);
             }
-        }
 
         auto idx = [&](int corner, int j) -> size_t
         { return (size_t)(((corner + N) % N) * P + j); };
@@ -298,32 +273,26 @@ public:
                 SULoopInputAddVertexIndex(loop, k);
             size_t fi = 0;
             SUGeometryInputAddFace(geom, &loop, &fi);
-            SUMaterialInput mi = {};
-            mi.material = matFrame;
-            SUGeometryInputFaceSetFrontMaterial(geom, fi, &mi);
         };
 
-        // Faces laterais
+        // Faces laterais — winding CCW visto de fora (normal aponta para fora)
         for (int i = 0; i < N; ++i)
         {
             int next = (i + 1) % N;
             for (int j = 0; j < P - 1; ++j)
-            {
-                addFace({idx(i, j), idx(next, j), idx(next, j + 1), idx(i, j + 1)});
-            }
+                addFace({idx(i, j), idx(i, j + 1), idx(next, j + 1), idx(next, j)});
         }
 
-        // Faces internas
+        // Faces de tampa entre segmentos do perfil — winding corrigida
         for (int i = 0; i < N; ++i)
         {
             int next = (i + 1) % N;
-            addFace({idx(i, 0), idx(i, P - 1), idx(next, P - 1), idx(next, 0)});
+            addFace({idx(i, 0), idx(next, 0), idx(next, P - 1), idx(i, P - 1)});
         }
 
-        // --- Finalização do Componente ---
         SUComponentDefinitionRef def = SU_INVALID;
         SUComponentDefinitionCreate(&def);
-        SUComponentDefinitionSetName(def, "FRAME_SWEEP");
+        SUComponentDefinitionSetName(def, name.c_str());
         SUModelAddComponentDefinitions(model, 1, &def);
 
         SUEntitiesRef defEntities = SU_INVALID;
@@ -339,6 +308,201 @@ public:
         SUTransformation identity = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
         SUComponentInstanceSetTransform(inst, &identity);
         SUEntitiesAddInstance(modelEntities, inst, nullptr);
+    }
+
+    static void applyImageMaterialToComponent(
+        SUModelRef model,
+        const std::string &componentGuid,
+        const std::string &imagePath)
+    {
+        if (SUIsInvalid(model))
+            throw std::runtime_error("Modelo inválido");
+
+        // 1. Localizar a definição do componente
+        SUComponentDefinitionRef targetDef = SU_INVALID;
+        size_t defCount = 0;
+        SUModelGetNumComponentDefinitions(model, &defCount);
+        if (defCount > 0)
+        {
+            std::vector<SUComponentDefinitionRef> defs(defCount);
+            SUModelGetComponentDefinitions(model, defCount, defs.data(), &defCount);
+
+            for (auto &def : defs)
+            {
+                SUStringRef guidStr = SU_INVALID;
+                SUStringCreate(&guidStr);
+                SUComponentDefinitionGetGuid(def, &guidStr);
+
+                size_t len = 0;
+                SUStringGetUTF8Length(guidStr, &len);
+                std::vector<char> buf(len + 1, '\0');
+                SUStringGetUTF8(guidStr, len + 1, buf.data(), &len);
+                SUStringRelease(&guidStr);
+
+                if (componentGuid == std::string(buf.data()))
+                {
+                    targetDef = def;
+                    break;
+                }
+            }
+        }
+
+        if (SUIsInvalid(targetDef))
+            throw std::runtime_error("GUID não encontrado");
+
+        // 2. Gerar nome único para o material para evitar corrupção
+        // Adicionar um timestamp ou sufixo garante que o SKP não quebre por nomes duplicados
+        std::string matName = "Mat_" + componentGuid;
+
+        // 3. Criar Material e Textura de forma segura
+        SUMaterialRef mat = SU_INVALID;
+        if (SUMaterialCreate(&mat) != SU_ERROR_NONE)
+            throw std::runtime_error("Falha ao criar material");
+
+        SUMaterialSetName(mat, matName.c_str());
+
+        SUTextureRef tex = SU_INVALID;
+        // Note: 100.0, 100.0 define a escala inicial da textura no SketchUp
+        if (SUTextureCreateFromFile(&tex, imagePath.c_str(), 1.0, 1.0) == SU_ERROR_NONE)
+        {
+            SUMaterialSetTexture(mat, tex);
+            // Após SUMaterialSetTexture, o Material é dono da textura.
+            // Não é estritamente necessário dar Release na textura aqui se ela foi vinculada,
+            // mas o SDK recomenda dependendo da versão. O material cuidará disso.
+        }
+        else
+        {
+            SUMaterialRelease(&mat);
+            throw std::runtime_error("Falha ao carregar imagem: " + imagePath);
+        }
+
+        // 4. ADICIONAR AO MODELO ANTES DE USAR
+        // Isso é vital. O material precisa estar registrado no "pool" do modelo.
+        if (SUModelAddMaterials(model, 1, &mat) != SU_ERROR_NONE)
+        {
+            // Se falhar, pode ser que o nome já exista.
+            // Tente recuperar o material existente ou dar release.
+            SUMaterialRelease(&mat);
+            // Se o erro for por nome duplicado, o salvamento falharia se não tratássemos.
+            return;
+        }
+
+        // 5. Aplicar nas faces
+        SUEntitiesRef entities = SU_INVALID;
+        SUComponentDefinitionGetEntities(targetDef, &entities);
+
+        size_t faceCount = 0;
+        SUEntitiesGetNumFaces(entities, &faceCount);
+
+        if (faceCount > 0)
+        {
+            std::vector<SUFaceRef> faces(faceCount);
+            SUEntitiesGetFaces(entities, faceCount, faces.data(), &faceCount);
+
+            for (auto &face : faces)
+            {
+                if (SUIsValid(face))
+                {
+                    // Aplicar na frente e no verso para garantir visibilidade
+                    SUFaceSetFrontMaterial(face, mat);
+                    SUFaceSetBackMaterial(face, mat);
+                }
+            }
+        }
+    }
+
+    static void applyColorMaterialToComponent(
+        SUModelRef model,
+        const std::string &componentGuid,
+        uint8_t r,
+        uint8_t g,
+        uint8_t b,
+        uint8_t a)
+    {
+        if (SUIsInvalid(model))
+            throw std::runtime_error("applyColorMaterialToComponent: model inválido");
+
+        // 1. Localizar definição pelo GUID
+        size_t defCount = 0;
+        SUModelGetNumComponentDefinitions(model, &defCount);
+        if (defCount == 0)
+            throw std::runtime_error("applyColorMaterialToComponent: modelo sem definições de componente");
+
+        std::vector<SUComponentDefinitionRef> defs(defCount);
+        SUModelGetComponentDefinitions(model, defCount, defs.data(), &defCount);
+
+        SUComponentDefinitionRef targetDef = SU_INVALID;
+        for (auto &def : defs)
+        {
+            SUStringRef guidStr = SU_INVALID;
+            SUStringCreate(&guidStr);
+            SUComponentDefinitionGetGuid(def, &guidStr);
+
+            size_t len = 0;
+            SUStringGetUTF8Length(guidStr, &len);
+            std::vector<char> buf(len + 1, '\0');
+            size_t outLen = 0;
+            SUStringGetUTF8(guidStr, len + 1, buf.data(), &outLen);
+            SUStringRelease(&guidStr);
+
+            if (componentGuid == std::string(buf.data()))
+            {
+                targetDef = def;
+                break;
+            }
+        }
+
+        if (SUIsInvalid(targetDef))
+            throw std::runtime_error("applyColorMaterialToComponent: GUID não encontrado: " + componentGuid);
+
+        // 2. Criar material
+        SUMaterialRef mat = SU_INVALID;
+        if (SUMaterialCreate(&mat) != SU_ERROR_NONE)
+            throw std::runtime_error("applyColorMaterialToComponent: SUMaterialCreate falhou");
+
+        // 3. Definir nome
+        SUMaterialSetName(mat, ("Color_" + componentGuid).c_str());
+
+        // 4. Definir cor RGBA
+        SUColor color{};
+        color.red = r;
+        color.green = g;
+        color.blue = b;
+        color.alpha = a;
+        SUMaterialSetColor(mat, &color);
+
+        // 5. Colorize type
+        SUMaterialSetColorizeType(mat, SUMaterialColorizeType_Shift);
+
+        // 6. Transparência
+        if (a < 255)
+        {
+            SUMaterialSetOpacity(mat, static_cast<double>(a) / 255.0);
+            SUMaterialSetUseOpacity(mat, true);
+        }
+
+        // 7. Adicionar ao modelo — ownership transferido, não chamar Release
+        if (SUModelAddMaterials(model, 1, &mat) != SU_ERROR_NONE)
+            throw std::runtime_error("applyColorMaterialToComponent: SUModelAddMaterials falhou");
+
+        // 8. Aplicar nas faces
+        SUEntitiesRef entities = SU_INVALID;
+        SUComponentDefinitionGetEntities(targetDef, &entities);
+
+        size_t faceCount = 0;
+        SUEntitiesGetNumFaces(entities, &faceCount);
+
+        if (faceCount > 0)
+        {
+            std::vector<SUFaceRef> faces(faceCount);
+            SUEntitiesGetFaces(entities, faceCount, faces.data(), &faceCount);
+
+            for (auto &face : faces)
+            {
+                if (SUIsValid(face))
+                    SUFaceSetFrontMaterial(face, mat);
+            }
+        }
     }
 
     static void InitBBox(SUBoundingBox3D &bbox)

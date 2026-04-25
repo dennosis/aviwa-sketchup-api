@@ -55,10 +55,28 @@ class CreateInformativeImageDto : public oatpp::DTO
 {
 
     DTO_INIT(CreateInformativeImageDto, DTO)
-    DTO_FIELD(String, fileId, "fileId");
-    DTO_FIELD(String, imageId, "imageId");
-    DTO_FIELD(String, name, "name");
-    DTO_FIELD(Float32, scale, "scale") = 1.0;
+    DTO_FIELD(String, fileId);
+    DTO_FIELD(String, imageId);
+    DTO_FIELD(String, name);
+    DTO_FIELD(Float32, scale) = 1.0;
+};
+
+class ApplyImageMaterialDto : public oatpp::DTO
+{
+
+    DTO_INIT(ApplyImageMaterialDto, DTO)
+    DTO_FIELD(String, fileId);
+    DTO_FIELD(String, imageId);
+    DTO_FIELD(String, guid);
+};
+
+class ApplyColorMaterialDto : public oatpp::DTO
+{
+
+    DTO_INIT(ApplyColorMaterialDto, DTO)
+    DTO_FIELD(String, fileId);
+    DTO_FIELD(String, guid);
+    DTO_FIELD(String, color);
 };
 
 class CreateSkpResultDto : public oatpp::DTO
@@ -84,6 +102,16 @@ class CreateTexturedRectDto : public oatpp::DTO
     DTO_FIELD(Float64, width);
     DTO_FIELD(Float64, height);
     DTO_FIELD(Float64, thickness);
+    DTO_FIELD(String, name);
+};
+
+class CreateSweptFrameDto : public oatpp::DTO
+{
+    DTO_INIT(CreateSweptFrameDto, DTO)
+    DTO_FIELD(String, fileId);
+    DTO_FIELD(Float64, width);
+    DTO_FIELD(Float64, height);
+    DTO_FIELD(String, name);
     DTO_FIELD(Vector<Object<PointDto>>, profile);
 };
 

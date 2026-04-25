@@ -17,10 +17,16 @@ auto withTempFileGuard(const oatpp::String &fileId, Fn &&fn)
         TempFileManager::instance().remove(fileId->c_str());
         return result;
     }
+    catch (const oatpp::web::protocol::http::HttpError e)
+    {
+        TempFileManager::instance().remove(fileId->c_str());
+        throw;
+    }
     catch (const std::exception &e)
     {
         TempFileManager::instance().remove(fileId->c_str());
         OATPP_ASSERT_HTTP(false, Status::CODE_500, e.what());
+        throw;
     }
 }
 
