@@ -137,6 +137,15 @@ class UpdateAttributeDto : public oatpp::DTO
     DTO_FIELD(List<Object<AttributeItemDto>>, attributes);
 };
 
+class UpdateInstanceLockedDto : public oatpp::DTO
+{
+    DTO_INIT(UpdateInstanceLockedDto, DTO);
+    DTO_FIELD(String, fileId);
+    DTO_FIELD(String, guid);
+    DTO_FIELD(Boolean, locked);
+};
+
+
 class CreateWrapDto : public oatpp::DTO
 {
     DTO_INIT(CreateWrapDto, DTO)

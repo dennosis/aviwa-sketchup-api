@@ -308,6 +308,37 @@ public:
                                       }); });
     }
 
+    std::string setInstanceLocked(const std::string &filepath,
+                                  const std::string &guid,
+                                  bool locked)
+    {
+        return editAndSaveModel(filepath, [&](SUModelRef model)
+                                {
+        SUEntitiesRef root = SU_INVALID;
+        SUResult res = SUModelGetEntities(model, &root);
+        if (res != SU_ERROR_NONE)
+            throw std::runtime_error("SUModelGetEntities failed: " + std::to_string(res));
+
+        SUEntityRef e = SketchUpUtils::findEntityByGuid(root, guid);
+        if (SUIsInvalid(e))
+            throw std::runtime_error("Entity not found for guid: " + guid);
+
+        SUComponentInstanceRef inst = SUComponentInstanceFromEntity(e);
+        if (SUIsInvalid(inst))
+            throw std::runtime_error("Entity is not a component instance");
+
+        res = SUComponentInstanceSetLocked(inst, locked);
+        if (res != SU_ERROR_NONE)
+            throw std::runtime_error("SUComponentInstanceSetLocked failed: " + std::to_string(res));
+
+        bool is_locked = false;
+        res = SUComponentInstanceIsLocked(inst, &is_locked);
+        if (res != SU_ERROR_NONE)
+            throw std::runtime_error("SUComponentInstanceIsLocked failed: " + std::to_string(res));
+        if (is_locked != locked)
+            throw std::runtime_error("Lock state mismatch after set"); });
+    }
+
     std::string updateDefinitionAttribute(const std::string &filepath,
                                           const std::string &guid,
                                           const std::vector<SketchUpComponentAttribute> &attributes)

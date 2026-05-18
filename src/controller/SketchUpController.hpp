@@ -33,6 +33,13 @@ private:
         REQUIRE_FIELD(updateDto->attributes, "attributes");
     }
 
+    void validateUpdateInstanceLockedDto(const oatpp::Object<UpdateInstanceLockedDto> &updateDto)
+    {
+        REQUIRE_FIELD(updateDto->fileId, "fileId");
+        REQUIRE_FIELD(updateDto->guid, "guid");
+        REQUIRE_FIELD(updateDto->locked, "locked");
+    }
+
     std::vector<SketchUpComponentAttribute> parseAttributes(
         const oatpp::List<oatpp::Object<AttributeItemDto>> &attributes)
     {
@@ -98,6 +105,26 @@ public:
         auto treeResponse = ItemMapper::toDtoList(treeData);
 
         return createDtoResponse(Status::CODE_200, treeResponse);
+    }
+
+    ENDPOINT("POST", "/file/update/instance/locked", updateInstanceLocked,
+             BODY_DTO(Object<UpdateInstanceLockedDto>, body))
+    {
+
+        validateUpdateInstanceLockedDto(body);
+        
+        bool locked = body->locked == true;
+
+        auto buffer = withTempFileGuard(body->fileId, [&](auto &entry)
+                                        {
+        auto path = m_sketchUpService->setInstanceLocked(
+            entry.filepath.string(),
+            body->guid->c_str(),
+            locked);
+
+        return SkpResponseBuilder::readFileToBuffer(path); });
+
+        return SkpResponseBuilder::buildResponseFromBuffer(this, buffer, "file.skp");
     }
 
     ENDPOINT("POST", "/file/update/instance", updateInst,
